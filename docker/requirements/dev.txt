@@ -1,0 +1,15 @@
+# ---------------------------------------------------------------------------
+# Test and lint requirements. Installed into the platform image so the whole
+# suite can run inside the container (`scripts/run_tests.sh`), and usable in a
+# host virtualenv for unit tests that need no services.
+# ---------------------------------------------------------------------------
+
+-r platform.txt
+-r dbt.txt
+
+pytest==9.2.0
+pytest-cov==7.1.0
+pytest-timeout==2.4.0
+httpx==0.28.1
+freezegun==1.5.5
+ruff==0.17.6

@@ -1,0 +1,635 @@
+{
+  "uid": "dq-overview",
+  "title": "1. Platform Overview",
+  "description": "Health of every monitored dataset, the latest gate decision, and where failures are concentrated.",
+  "tags": [
+    "data-quality",
+    "overview"
+  ],
+  "timezone": "utc",
+  "editable": false,
+  "schemaVersion": 39,
+  "version": 1,
+  "refresh": "30s",
+  "time": {
+    "from": "now-24h",
+    "to": "now"
+  },
+  "timepicker": {
+    "refresh_intervals": [
+      "10s",
+      "30s",
+      "1m",
+      "5m",
+      "15m"
+    ]
+  },
+  "panels": [
+    {
+      "type": "stat",
+      "title": "Datasets monitored",
+      "description": "Registered from the contract files, not hardcoded.",
+      "datasource": {
+        "type": "postgres",
+        "uid": "dq-observability"
+      },
+      "gridPos": {
+        "h": 4,
+        "w": 4,
+        "x": 0,
+        "y": 0
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "postgres",
+            "uid": "dq-observability"
+          },
+          "format": "table",
+          "rawQuery": true,
+          "rawSql": "SELECT count(*) AS value FROM datasets WHERE is_active",
+          "editorMode": "code"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "custom": {}
+        },
+        "overrides": []
+      },
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "textMode": "auto",
+        "graphMode": "none",
+        "colorMode": "value",
+        "justifyMode": "auto",
+        "orientation": "auto"
+      }
+    },
+    {
+      "type": "stat",
+      "title": "Unhealthy datasets",
+      "description": "A dataset is unhealthy when its score is below the contract threshold OR any CRITICAL finding exists - the second reason is independent of the score.",
+      "datasource": {
+        "type": "postgres",
+        "uid": "dq-observability"
+      },
+      "gridPos": {
+        "h": 4,
+        "w": 4,
+        "x": 4,
+        "y": 0
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "postgres",
+            "uid": "dq-observability"
+          },
+          "format": "table",
+          "rawQuery": true,
+          "rawSql": "SELECT count(*) AS value FROM (\n                      SELECT DISTINCT ON (dataset_id) health_status\n                      FROM quality_scores ORDER BY dataset_id, computed_at DESC\n                    ) latest WHERE health_status <> 'healthy'",
+          "editorMode": "code"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "custom": {
+            "thresholdsStyle": {
+              "mode": "off"
+            }
+          },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              },
+              {
+                "color": "orange",
+                "value": 1
+              },
+              {
+                "color": "red",
+                "value": 3
+              }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "textMode": "auto",
+        "graphMode": "none",
+        "colorMode": "value",
+        "justifyMode": "auto",
+        "orientation": "auto"
+      }
+    },
+    {
+      "type": "stat",
+      "title": "Open incidents",
+      "description": "OPEN, ACKNOWLEDGED or SUPPRESSED. Resolved ones excluded.",
+      "datasource": {
+        "type": "postgres",
+        "uid": "dq-observability"
+      },
+      "gridPos": {
+        "h": 4,
+        "w": 4,
+        "x": 8,
+        "y": 0
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "postgres",
+            "uid": "dq-observability"
+          },
+          "format": "table",
+          "rawQuery": true,
+          "rawSql": "SELECT count(*) AS value FROM incidents WHERE status IN ('OPEN','ACKNOWLEDGED','SUPPRESSED')",
+          "editorMode": "code"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "custom": {
+            "thresholdsStyle": {
+              "mode": "off"
+            }
+          },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              },
+              {
+                "color": "orange",
+                "value": 1
+              },
+              {
+                "color": "red",
+                "value": 5
+              }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "textMode": "auto",
+        "graphMode": "none",
+        "colorMode": "value",
+        "justifyMode": "auto",
+        "orientation": "auto"
+      }
+    },
+    {
+      "type": "gauge",
+      "title": "Mean quality score",
+      "description": "Unweighted mean of the latest score per dataset.",
+      "datasource": {
+        "type": "postgres",
+        "uid": "dq-observability"
+      },
+      "gridPos": {
+        "h": 4,
+        "w": 6,
+        "x": 12,
+        "y": 0
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "postgres",
+            "uid": "dq-observability"
+          },
+          "format": "table",
+          "rawQuery": true,
+          "rawSql": "SELECT round(avg(overall_score), 2) AS value FROM (\n                      SELECT DISTINCT ON (dataset_id) overall_score\n                      FROM quality_scores ORDER BY dataset_id, computed_at DESC\n                    ) latest",
+          "editorMode": "code"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "custom": {
+            "thresholdsStyle": {
+              "mode": "off"
+            }
+          },
+          "unit": "none",
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "red",
+                "value": null
+              },
+              {
+                "color": "orange",
+                "value": 70
+              },
+              {
+                "color": "green",
+                "value": 90
+              }
+            ]
+          },
+          "min": 0,
+          "max": 100
+        },
+        "overrides": []
+      },
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "showThresholdLabels": false,
+        "showThresholdMarkers": true
+      }
+    },
+    {
+      "type": "stat",
+      "title": "Last gate decision",
+      "description": "FAIL means the pipeline was stopped on purpose; the run is recorded as `blocked`, a different outcome from a crash.",
+      "datasource": {
+        "type": "postgres",
+        "uid": "dq-observability"
+      },
+      "gridPos": {
+        "h": 4,
+        "w": 8,
+        "x": 18,
+        "y": 0
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "postgres",
+            "uid": "dq-observability"
+          },
+          "format": "table",
+          "rawQuery": true,
+          "rawSql": "SELECT decision AS value FROM gate_decisions ORDER BY decided_at DESC LIMIT 1",
+          "editorMode": "code"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "custom": {}
+        },
+        "overrides": []
+      },
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "textMode": "value",
+        "graphMode": "none",
+        "colorMode": "value",
+        "justifyMode": "auto",
+        "orientation": "auto"
+      }
+    },
+    {
+      "type": "bargauge",
+      "title": "Quality score per dataset (latest)",
+      "description": "Colour follows the shared score thresholds.",
+      "datasource": {
+        "type": "postgres",
+        "uid": "dq-observability"
+      },
+      "gridPos": {
+        "h": 9,
+        "w": 12,
+        "x": 0,
+        "y": 4
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "postgres",
+            "uid": "dq-observability"
+          },
+          "format": "table",
+          "rawQuery": true,
+          "rawSql": "SELECT d.dataset_name AS metric, q.overall_score AS value\n                    FROM (\n                      SELECT DISTINCT ON (dataset_id) dataset_id, overall_score\n                      FROM quality_scores ORDER BY dataset_id, computed_at DESC\n                    ) q JOIN datasets d USING (dataset_id)\n                    ORDER BY q.overall_score ASC",
+          "editorMode": "code"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "custom": {
+            "thresholdsStyle": {
+              "mode": "off"
+            }
+          },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "red",
+                "value": null
+              },
+              {
+                "color": "orange",
+                "value": 70
+              },
+              {
+                "color": "green",
+                "value": 90
+              }
+            ]
+          },
+          "min": 0,
+          "max": 100
+        },
+        "overrides": []
+      },
+      "options": {
+        "displayMode": "gradient",
+        "orientation": "horizontal",
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "showUnfilled": true
+      }
+    },
+    {
+      "type": "table",
+      "title": "Dataset health",
+      "description": "`unmeasured` lists dimensions that produced no measurement. They are excluded from the score rather than counted as 100.",
+      "datasource": {
+        "type": "postgres",
+        "uid": "dq-observability"
+      },
+      "gridPos": {
+        "h": 9,
+        "w": 12,
+        "x": 12,
+        "y": 4
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "postgres",
+            "uid": "dq-observability"
+          },
+          "format": "table",
+          "rawQuery": true,
+          "rawSql": "SELECT d.dataset_name AS \"dataset\", d.criticality AS \"criticality\",\n                           q.overall_score AS \"score\", q.health_status AS \"health\",\n                           q.has_critical_failure AS \"critical\",\n                           q.dimensions_measured || '/' || q.dimensions_total AS \"measured\",\n                           COALESCE(q.unmeasured_dimensions::text, '[]') AS \"unmeasured\"\n                    FROM (\n                      SELECT DISTINCT ON (dataset_id) *\n                      FROM quality_scores ORDER BY dataset_id, computed_at DESC\n                    ) q JOIN datasets d USING (dataset_id)\n                    ORDER BY q.overall_score ASC, d.dataset_name",
+          "editorMode": "code"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "custom": {}
+        },
+        "overrides": []
+      },
+      "options": {
+        "showHeader": true,
+        "cellHeight": "sm",
+        "footer": {
+          "show": false
+        }
+      }
+    },
+    {
+      "type": "timeseries",
+      "title": "Quality score over time",
+      "description": "From Postgres, so history outlives Prometheus retention.",
+      "datasource": {
+        "type": "postgres",
+        "uid": "dq-observability"
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 24,
+        "x": 0,
+        "y": 13
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "postgres",
+            "uid": "dq-observability"
+          },
+          "format": "time_series",
+          "rawQuery": true,
+          "rawSql": "SELECT q.computed_at AS time, d.dataset_name AS metric,\n                           q.overall_score AS value\n                    FROM quality_scores q JOIN datasets d USING (dataset_id)\n                    WHERE $__timeFilter(q.computed_at)\n                    ORDER BY q.computed_at",
+          "editorMode": "code"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "custom": {},
+          "unit": "none",
+          "min": 0,
+          "max": 100
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom",
+          "showLegend": true
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      }
+    },
+    {
+      "type": "piechart",
+      "title": "Pipeline runs by outcome",
+      "description": "`blocked` is counted separately from `failed`: the platform stopping the pipeline on purpose is not a crash.",
+      "datasource": {
+        "type": "postgres",
+        "uid": "dq-observability"
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 8,
+        "x": 0,
+        "y": 21
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "postgres",
+            "uid": "dq-observability"
+          },
+          "format": "table",
+          "rawQuery": true,
+          "rawSql": "SELECT status AS metric, count(*) AS value FROM pipeline_runs GROUP BY status ORDER BY status",
+          "editorMode": "code"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "custom": {}
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "right",
+          "showLegend": true
+        },
+        "pieType": "donut",
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        }
+      }
+    },
+    {
+      "type": "barchart",
+      "title": "Rule failures by dimension",
+      "description": "Which of the six quality dimensions is actually failing.",
+      "datasource": {
+        "type": "postgres",
+        "uid": "dq-observability"
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 8,
+        "x": 8,
+        "y": 21
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "postgres",
+            "uid": "dq-observability"
+          },
+          "format": "table",
+          "rawQuery": true,
+          "rawSql": "SELECT dimension AS \"dimension\", count(*) AS \"failures\"\n                    FROM validation_results WHERE success = false\n                    GROUP BY dimension ORDER BY count(*) DESC",
+          "editorMode": "code"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "custom": {}
+        },
+        "overrides": []
+      },
+      "options": {
+        "orientation": "horizontal",
+        "legend": {
+          "showLegend": false
+        },
+        "xTickLabelRotation": 0
+      }
+    },
+    {
+      "type": "barchart",
+      "title": "dbt: models executed vs assertions held",
+      "description": "Two different questions. A model succeeding means the SQL ran; a test passing means an assertion about the data held. One number for both would hide failing assertions.",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "dq-prometheus"
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 8,
+        "x": 16,
+        "y": 21
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "dq-prometheus"
+          },
+          "expr": "dq_dbt_models",
+          "legendFormat": "models {{result}}",
+          "range": false,
+          "instant": true,
+          "editorMode": "code"
+        },
+        {
+          "refId": "B",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "dq-prometheus"
+          },
+          "expr": "dq_dbt_tests",
+          "legendFormat": "tests {{result}}",
+          "range": false,
+          "instant": true,
+          "editorMode": "code"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "custom": {}
+        },
+        "overrides": []
+      },
+      "options": {
+        "orientation": "horizontal",
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom",
+          "showLegend": true
+        }
+      }
+    }
+  ]
+}

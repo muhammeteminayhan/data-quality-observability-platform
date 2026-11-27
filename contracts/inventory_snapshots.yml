@@ -1,0 +1,163 @@
+# ===========================================================================
+# Contract: inventory_snapshots (Parquet in MinIO)
+# ===========================================================================
+dataset: inventory_snapshots
+version: "1.0.0"
+owner: analytics-platform
+criticality: medium
+layer: lake
+description: >
+  One stock position per product per day at
+  s3://<bucket>/inventory_snapshots/dt=YYYY-MM-DD/. Row count tracks the
+  product catalogue, so it is stable and a drop means a partial write.
+
+source:
+  type: parquet
+  location: inventory_snapshots
+  event_timestamp_column: event_ts
+  ingestion_timestamp_column: ingested_at
+  partition_column: dt
+
+freshness:
+  enabled: true
+  warning_after_minutes: 1500
+  critical_after_minutes: 4320
+  on_missing_timestamp: WARNING
+
+volume:
+  enabled: true
+  min_rows: 100
+  max_rows: 100000
+  severity: ERROR
+  baseline:
+    method: rolling_median_mad
+    window_days: 28
+    min_history_points: 5
+    warning_z: 3.5
+    critical_z: 6.0
+    same_day_type: false
+
+schema:
+  enforce: true
+  on_additive: INFO
+  on_type_change: CRITICAL
+  on_column_removal: CRITICAL
+  on_rename_candidate: ERROR
+  columns:
+    - name: snapshot_date
+      type: date
+      nullable: false
+    - name: product_id
+      type: string
+      nullable: false
+    - name: category
+      type: string
+      nullable: false
+    - name: stock_on_hand
+      type: int64
+      nullable: false
+    - name: stock_reserved
+      type: int64
+      nullable: false
+    - name: stock_available
+      type: int64
+      nullable: false
+    - name: reorder_point
+      type: int64
+    - name: needs_reorder
+      type: bool
+    - name: units_sold_today
+      type: int64
+    - name: unit_cost
+      type: double
+    - name: stock_value
+      type: double
+    - name: event_ts
+      type: timestamptz
+      nullable: false
+    - name: ingested_at
+      type: timestamptz
+      nullable: false
+    - name: batch_id
+      type: string
+      nullable: false
+
+distribution:
+  enabled: true
+  min_sample_size: 500
+  severity: WARNING
+  numeric:
+    - column: stock_on_hand
+      method: psi
+      bins: 10
+      warning: 0.15
+      critical: 0.30
+  categorical:
+    - column: category
+      method: chi_square
+      alpha: 0.01
+      min_expected_frequency: 5
+
+quality_rules:
+  - name: product_id_not_null
+    dimension: completeness
+    severity: CRITICAL
+    expectation: expect_column_values_to_not_be_null
+    column: product_id
+
+  - name: stock_on_hand_not_null
+    dimension: completeness
+    severity: ERROR
+    expectation: expect_column_values_to_not_be_null
+    column: stock_on_hand
+
+  - name: product_unique_per_snapshot
+    dimension: uniqueness
+    severity: ERROR
+    expectation: expect_compound_columns_to_be_unique
+    kwargs:
+      column_list: [snapshot_date, product_id]
+
+  - name: stock_on_hand_non_negative
+    dimension: validity
+    severity: ERROR
+    expectation: expect_column_values_to_be_between
+    column: stock_on_hand
+    kwargs:
+      min_value: 0
+      max_value: 10000000
+
+  - name: stock_reserved_non_negative
+    dimension: validity
+    severity: ERROR
+    expectation: expect_column_values_to_be_between
+    column: stock_reserved
+    kwargs:
+      min_value: 0
+      max_value: 10000000
+
+  - name: available_equals_on_hand_minus_reserved
+    dimension: consistency
+    severity: ERROR
+    description: >
+      stock_available must equal stock_on_hand - stock_reserved exactly; these
+      are integers, so no rounding tolerance applies.
+
+      This is a `pandas_query` rule, the Parquet analogue of `unexpected_rows`:
+      rows matching the query are the violations. GX's own
+      ExpectMulticolumnSumToEqual cannot express it, because its `sum_total`
+      is a scalar rather than another column.
+    expectation: pandas_query
+    kwargs:
+      query: "stock_available != stock_on_hand - stock_reserved"
+
+score:
+  weights:
+    completeness: 0.25
+    uniqueness: 0.15
+    validity: 0.20
+    consistency: 0.15
+    freshness: 0.15
+    volume: 0.10
+  healthy_at: 90.0
+  degraded_at: 70.0

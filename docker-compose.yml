@@ -1,0 +1,634 @@
+# ===========================================================================
+# Centralized Data Quality & Observability Platform
+# ===========================================================================
+# Every image tag is pinned. Nothing uses :latest.
+#
+# Profiles
+# --------
+#   core (no profile key)   always started: postgres x2, MinIO, Airflow.
+#                           This is the reduced development profile - it runs
+#                           the whole data-quality workflow (generate,
+#                           validate, dbt, observe, gate, incidents) with no
+#                           lineage, metrics or dashboards.
+#   observability           Marquez + web UI, Prometheus, Grafana, the read
+#                           API, the exporter and the webhook receiver.
+#
+# .env.example sets COMPOSE_PROFILES=observability so that a plain
+#   docker compose up -d
+# brings up the entire platform. For the reduced profile, name the core
+# services explicitly - scripts/start.sh --dev does exactly that.
+#
+# Memory
+# ------
+# Steady-state limits below total ~8.3 GiB; the full stack wants 10 GiB of
+# Docker memory, the reduced profile about 6 GiB. See docs/OPERATIONS.md.
+# ===========================================================================
+
+name: data-quality-observability-platform
+
+# ---------------------------------------------------------------------------
+# Shared Airflow definition
+# ---------------------------------------------------------------------------
+x-airflow-common: &airflow-common
+  build:
+    context: .
+    dockerfile: docker/airflow/Dockerfile
+  image: dq-platform/airflow:3.3.1
+  environment: &airflow-env
+    # --- core ---------------------------------------------------------
+    AIRFLOW__CORE__EXECUTOR: LocalExecutor
+    AIRFLOW__CORE__LOAD_EXAMPLES: "false"
+    AIRFLOW__CORE__DAGS_FOLDER: /opt/airflow/dags
+    AIRFLOW__CORE__FERNET_KEY: ${AIRFLOW_FERNET_KEY}
+    AIRFLOW__CORE__DAGS_ARE_PAUSED_AT_CREATION: "true"
+    AIRFLOW__CORE__PARALLELISM: "8"
+    AIRFLOW__CORE__MAX_ACTIVE_TASKS_PER_DAG: "8"
+    AIRFLOW__DATABASE__SQL_ALCHEMY_CONN: >-
+      postgresql+psycopg2://${AIRFLOW_DB_USER}:${AIRFLOW_DB_PASSWORD}@postgres-platform:5432/${AIRFLOW_DB}
+    # Airflow 3 runs tasks against the execution API, so even LocalExecutor
+    # workers need to reach the api-server over the network.
+    AIRFLOW__CORE__EXECUTION_API_SERVER_URL: http://airflow-apiserver:8080/execution/
+
+    # --- api / auth ---------------------------------------------------
+    AIRFLOW__API__BASE_URL: http://localhost:${AIRFLOW_HOST_PORT}
+    AIRFLOW__API_AUTH__JWT_SECRET: ${AIRFLOW_JWT_SECRET}
+    # SimpleAuthManager is Airflow 3's default. It stores passwords in
+    # plaintext in the file below, which is acceptable for a local portfolio
+    # deployment and is called out in docs/SECURITY.md. airflow-init writes
+    # the file from .env so the password is predictable instead of generated
+    # into the container logs.
+    AIRFLOW__CORE__SIMPLE_AUTH_MANAGER_USERS: "${AIRFLOW_ADMIN_USER}:admin"
+    AIRFLOW__CORE__SIMPLE_AUTH_MANAGER_PASSWORDS_FILE: /opt/airflow/auth/passwords.json
+
+    # --- scheduler ----------------------------------------------------
+    AIRFLOW__SCHEDULER__MIN_FILE_PROCESS_INTERVAL: "30"
+    AIRFLOW__LOGGING__LOGGING_LEVEL: ${DQ_LOG_LEVEL:-INFO}
+
+    # --- OpenLineage --------------------------------------------------
+    # Disabled only in the reduced profile, where Marquez is not running.
+    AIRFLOW__OPENLINEAGE__DISABLED: ${OPENLINEAGE_DISABLED:-false}
+    AIRFLOW__OPENLINEAGE__NAMESPACE: ${MARQUEZ_NAMESPACE}
+    AIRFLOW__OPENLINEAGE__TRANSPORT: >-
+      {"type": "http", "url": "http://marquez:5000", "endpoint": "api/v1/lineage", "timeout": 10}
+
+    # --- platform -----------------------------------------------------
+    DQ_HOME: /opt/airflow/platform
+    PYTHONPATH: /opt/airflow/platform
+    DBT_BIN: /opt/dbt-venv/bin/dbt
+    DBT_PROJECT_DIR: /opt/airflow/platform/dbt
+    DBT_PROFILES_DIR: /opt/airflow/platform/dbt
+    DQ_ARTIFACTS_DIR: /opt/airflow/artifacts
+    DQ_SEED: ${DQ_SEED}
+    DQ_ENV: ${DQ_ENV:-local}
+    DQ_LOG_LEVEL: ${DQ_LOG_LEVEL:-INFO}
+
+    SOURCE_POSTGRES_HOST: postgres-source
+    SOURCE_POSTGRES_PORT: "5432"
+    SOURCE_POSTGRES_DB: ${SOURCE_POSTGRES_DB}
+    SOURCE_POSTGRES_USER: ${SOURCE_POSTGRES_USER}
+    SOURCE_POSTGRES_PASSWORD: ${SOURCE_POSTGRES_PASSWORD}
+
+    OBSERVABILITY_POSTGRES_HOST: postgres-platform
+    OBSERVABILITY_POSTGRES_PORT: "5432"
+    OBSERVABILITY_DB: ${OBSERVABILITY_DB}
+    OBSERVABILITY_DB_USER: ${OBSERVABILITY_DB_USER}
+    OBSERVABILITY_DB_PASSWORD: ${OBSERVABILITY_DB_PASSWORD}
+
+    MINIO_ENDPOINT: ${MINIO_ENDPOINT}
+    MINIO_BUCKET: ${MINIO_BUCKET}
+    MINIO_ACCESS_KEY: ${MINIO_ACCESS_KEY}
+    MINIO_SECRET_KEY: ${MINIO_SECRET_KEY}
+
+    MARQUEZ_URL: http://marquez:5000
+    MARQUEZ_NAMESPACE: ${MARQUEZ_NAMESPACE}
+    ALERT_WEBHOOK_URL: http://alert-webhook:8000/alerts
+    ALERT_WEBHOOK_TOKEN: ${ALERT_WEBHOOK_TOKEN}
+  volumes:
+    - ./airflow/dags:/opt/airflow/dags:ro
+    - ./airflow/scripts:/opt/airflow/scripts:ro
+    - ./src:/opt/airflow/platform/src:ro
+    - ./contracts:/opt/airflow/platform/contracts:ro
+    - ./dbt:/opt/airflow/platform/dbt
+    - ./sql:/opt/airflow/platform/sql:ro
+    - airflow_logs:/opt/airflow/logs
+    - airflow_auth:/opt/airflow/auth
+    - dq_artifacts:/opt/airflow/artifacts
+    - gx_state:/opt/airflow/platform/gx
+  user: "${AIRFLOW_UID:-50000}:0"
+  depends_on:
+    postgres-platform:
+      condition: service_healthy
+    postgres-source:
+      condition: service_healthy
+
+# ---------------------------------------------------------------------------
+# Shared definition for the three platform services. They are one image with
+# three different commands.
+# ---------------------------------------------------------------------------
+x-platform-build: &platform-build
+  build:
+    context: .
+    dockerfile: docker/platform/Dockerfile
+  image: dq-platform/platform:1.0.0
+
+x-platform-env: &platform-env
+  DQ_HOME: /opt/dq
+  PYTHONPATH: /opt/dq
+  DQ_ENV: ${DQ_ENV:-local}
+  DQ_LOG_LEVEL: ${DQ_LOG_LEVEL:-INFO}
+  DQ_SEED: ${DQ_SEED}
+  DQ_ARTIFACTS_DIR: /opt/dq/artifacts
+  DBT_PROJECT_DIR: /opt/dq/dbt
+  DBT_PROFILES_DIR: /opt/dq/dbt
+  DBT_BIN: dbt
+  SOURCE_POSTGRES_HOST: postgres-source
+  SOURCE_POSTGRES_PORT: "5432"
+  SOURCE_POSTGRES_DB: ${SOURCE_POSTGRES_DB}
+  SOURCE_POSTGRES_USER: ${SOURCE_POSTGRES_USER}
+  SOURCE_POSTGRES_PASSWORD: ${SOURCE_POSTGRES_PASSWORD}
+  OBSERVABILITY_POSTGRES_HOST: postgres-platform
+  OBSERVABILITY_POSTGRES_PORT: "5432"
+  OBSERVABILITY_DB: ${OBSERVABILITY_DB}
+  OBSERVABILITY_DB_USER: ${OBSERVABILITY_DB_USER}
+  OBSERVABILITY_DB_PASSWORD: ${OBSERVABILITY_DB_PASSWORD}
+  MINIO_ENDPOINT: ${MINIO_ENDPOINT}
+  MINIO_BUCKET: ${MINIO_BUCKET}
+  MINIO_ACCESS_KEY: ${MINIO_ACCESS_KEY}
+  MINIO_SECRET_KEY: ${MINIO_SECRET_KEY}
+  MARQUEZ_URL: http://marquez:5000
+  MARQUEZ_NAMESPACE: ${MARQUEZ_NAMESPACE}
+  ALERT_WEBHOOK_URL: http://alert-webhook:8000/alerts
+  ALERT_WEBHOOK_TOKEN: ${ALERT_WEBHOOK_TOKEN}
+  DQ_EXPORTER_PORT: ${DQ_EXPORTER_PORT}
+
+services:
+
+  # =======================================================================
+  # Source warehouse - the system being monitored
+  # =======================================================================
+  postgres-source:
+    image: postgres:18.7-trixie
+    container_name: dq-postgres-source
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${SOURCE_POSTGRES_USER}
+      POSTGRES_PASSWORD: ${SOURCE_POSTGRES_PASSWORD}
+      POSTGRES_DB: ${SOURCE_POSTGRES_DB}
+      # postgres:18 images expect the volume at /var/lib/postgresql with the
+      # data directory one level down. Mounting over /var/lib/postgresql/data
+      # as in older images makes initdb refuse to start.
+      PGDATA: /var/lib/postgresql/18/docker
+    # Docker's default 64MB /dev/shm is too small for PostgreSQL parallel
+    # query workers, which fail with "could not resize shared memory segment".
+    shm_size: 256mb
+    volumes:
+      - postgres_source_data:/var/lib/postgresql
+      - ./sql/source:/docker-entrypoint-initdb.d:ro
+    ports:
+      - "${SOURCE_POSTGRES_HOST_PORT}:5432"
+    healthcheck:
+      # Over TCP on purpose. During first initialisation the entrypoint runs a
+      # temporary server that listens on the unix socket only, so a
+      # socket-based pg_isready reports healthy before the init scripts run.
+      test: ["CMD-SHELL", "pg_isready -h 127.0.0.1 -U $${POSTGRES_USER} -d $${POSTGRES_DB}"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 40s
+    deploy:
+      resources:
+        limits:
+          memory: 512M
+
+  # =======================================================================
+  # Platform metadata server - observability_db, airflow_db, marquez_db
+  # =======================================================================
+  postgres-platform:
+    image: postgres:18.7-trixie
+    container_name: dq-postgres-platform
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${PLATFORM_POSTGRES_USER}
+      POSTGRES_PASSWORD: ${PLATFORM_POSTGRES_PASSWORD}
+      POSTGRES_DB: ${PLATFORM_POSTGRES_DB}
+      PGDATA: /var/lib/postgresql/18/docker
+      # Consumed by sql/platform/00_init.sh
+      OBSERVABILITY_DB: ${OBSERVABILITY_DB}
+      OBSERVABILITY_DB_USER: ${OBSERVABILITY_DB_USER}
+      OBSERVABILITY_DB_PASSWORD: ${OBSERVABILITY_DB_PASSWORD}
+      AIRFLOW_DB: ${AIRFLOW_DB}
+      AIRFLOW_DB_USER: ${AIRFLOW_DB_USER}
+      AIRFLOW_DB_PASSWORD: ${AIRFLOW_DB_PASSWORD}
+      MARQUEZ_DB: ${MARQUEZ_DB}
+      MARQUEZ_DB_USER: ${MARQUEZ_DB_USER}
+      MARQUEZ_DB_PASSWORD: ${MARQUEZ_DB_PASSWORD}
+    shm_size: 256mb
+    volumes:
+      - postgres_platform_data:/var/lib/postgresql
+      - ./sql/platform/00_init.sh:/docker-entrypoint-initdb.d/00_init.sh:ro
+      # Deliberately NOT in initdb.d: the entrypoint would also run it against
+      # POSTGRES_DB and create the observability tables in the wrong database.
+      # 00_init.sh applies it explicitly against observability_db.
+      - ./sql/platform/10_observability_schema.sql:/opt/platform-sql/10_observability_schema.sql:ro
+    ports:
+      - "${PLATFORM_POSTGRES_HOST_PORT}:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -h 127.0.0.1 -U $${POSTGRES_USER} -d $${POSTGRES_DB}"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 40s
+    deploy:
+      resources:
+        limits:
+          memory: 768M
+
+  # =======================================================================
+  # MinIO - object storage for the Parquet datasets
+  # =======================================================================
+  # minio/minio on Docker Hub has no tags any more and quay.io/minio/minio
+  # does not pull anonymously, so bitnamilegacy is the only source that can
+  # actually be pinned and pulled.
+  minio:
+    image: bitnamilegacy/minio:2025.7.23-debian-12-r5
+    container_name: dq-minio
+    restart: unless-stopped
+    environment:
+      MINIO_ROOT_USER: ${MINIO_ROOT_USER}
+      MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD}
+      MINIO_API_PORT_NUMBER: "9000"
+      MINIO_CONSOLE_PORT_NUMBER: "9001"
+      MINIO_SCHEME: http
+    volumes:
+      - minio_data:/bitnami/minio/data
+    ports:
+      - "${MINIO_HOST_API_PORT}:9000"
+      - "${MINIO_HOST_CONSOLE_PORT}:9001"
+    healthcheck:
+      test: ["CMD-SHELL", "curl -fsS http://127.0.0.1:9000/minio/health/live || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 20s
+    deploy:
+      resources:
+        limits:
+          memory: 512M
+
+  # Creates the bucket and a least-privilege service account, then proves the
+  # privilege boundary with a negative test (see scripts/minio_init.sh).
+  minio-init:
+    image: bitnamilegacy/minio-client:2025.7.21-debian-12-r3
+    container_name: dq-minio-init
+    depends_on:
+      minio:
+        condition: service_healthy
+    environment:
+      MINIO_ENDPOINT: http://minio:9000
+      MINIO_ROOT_USER: ${MINIO_ROOT_USER}
+      MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD}
+      MINIO_BUCKET: ${MINIO_BUCKET}
+      MINIO_ACCESS_KEY: ${MINIO_ACCESS_KEY}
+      MINIO_SECRET_KEY: ${MINIO_SECRET_KEY}
+    volumes:
+      - ./scripts/minio_init.sh:/scripts/minio_init.sh:ro
+    entrypoint: ["/bin/bash", "/scripts/minio_init.sh"]
+    restart: "no"
+
+  # =======================================================================
+  # Airflow 3.3.1
+  # =======================================================================
+  # One-shot: db migrate, auth file, connections and variables.
+  airflow-init:
+    <<: *airflow-common
+    container_name: dq-airflow-init
+    # The base image's entrypoint expects an airflow subcommand; this runs the
+    # bootstrap script instead.
+    entrypoint: ["/bin/bash", "/opt/airflow/scripts/airflow_init.sh"]
+    environment:
+      <<: *airflow-env
+      AIRFLOW_ADMIN_USER: ${AIRFLOW_ADMIN_USER}
+      AIRFLOW_ADMIN_PASSWORD: ${AIRFLOW_ADMIN_PASSWORD}
+    restart: "no"
+    deploy:
+      resources:
+        limits:
+          memory: 1G
+
+  airflow-apiserver:
+    <<: *airflow-common
+    container_name: dq-airflow-apiserver
+    command: ["api-server", "--port", "8080", "--host", "0.0.0.0"]
+    ports:
+      - "${AIRFLOW_HOST_PORT}:8080"
+    depends_on:
+      postgres-platform:
+        condition: service_healthy
+      postgres-source:
+        condition: service_healthy
+      airflow-init:
+        condition: service_completed_successfully
+    healthcheck:
+      test: ["CMD-SHELL", "curl -fsS http://127.0.0.1:8080/api/v2/version || exit 1"]
+      interval: 15s
+      timeout: 10s
+      retries: 10
+      start_period: 60s
+    restart: unless-stopped
+    deploy:
+      resources:
+        limits:
+          memory: 768M
+
+  airflow-scheduler:
+    <<: *airflow-common
+    container_name: dq-airflow-scheduler
+    command: ["scheduler"]
+    depends_on:
+      postgres-platform:
+        condition: service_healthy
+      postgres-source:
+        condition: service_healthy
+      airflow-init:
+        condition: service_completed_successfully
+      airflow-apiserver:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "airflow jobs check --job-type SchedulerJob --hostname \"$${HOSTNAME}\" || exit 1"]
+      interval: 30s
+      timeout: 20s
+      retries: 6
+      start_period: 60s
+    restart: unless-stopped
+    # LocalExecutor forks the tasks, so this container also runs the GX
+    # validations and the dbt build and needs real headroom.
+    deploy:
+      resources:
+        limits:
+          memory: 2G
+
+  # Airflow 3 parses DAGs in a dedicated process, not inside the scheduler.
+  airflow-dag-processor:
+    <<: *airflow-common
+    container_name: dq-airflow-dag-processor
+    command: ["dag-processor"]
+    depends_on:
+      postgres-platform:
+        condition: service_healthy
+      airflow-init:
+        condition: service_completed_successfully
+      airflow-apiserver:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "airflow jobs check --job-type DagProcessorJob --hostname \"$${HOSTNAME}\" || exit 1"]
+      interval: 30s
+      timeout: 20s
+      retries: 6
+      start_period: 60s
+    restart: unless-stopped
+    deploy:
+      resources:
+        limits:
+          memory: 768M
+
+  # =======================================================================
+  # Lineage - Marquez (OpenLineage backend) + web UI
+  # =======================================================================
+  marquez:
+    image: marquezproject/marquez:0.51.1
+    container_name: dq-marquez
+    profiles: ["observability"]
+    restart: unless-stopped
+    environment:
+      MARQUEZ_CONFIG: marquez.yml
+      MARQUEZ_PORT: "5000"
+      MARQUEZ_ADMIN_PORT: "5001"
+      POSTGRES_HOST: postgres-platform
+      POSTGRES_PORT: "5432"
+      POSTGRES_DB: ${MARQUEZ_DB}
+      POSTGRES_USER: ${MARQUEZ_DB_USER}
+      POSTGRES_PASSWORD: ${MARQUEZ_DB_PASSWORD}
+      JAVA_OPTS: "-Xms256m -Xmx768m"
+    volumes:
+      - ./marquez/marquez.yml:/usr/src/app/marquez.yml:ro
+    ports:
+      - "${MARQUEZ_HOST_API_PORT}:5000"
+      - "${MARQUEZ_HOST_ADMIN_PORT}:5001"
+    depends_on:
+      postgres-platform:
+        condition: service_healthy
+    healthcheck:
+      # The admin connector exposes Dropwizard's healthcheck; the application
+      # port has no unauthenticated health endpoint.
+      test: ["CMD-SHELL", "curl -fsS http://127.0.0.1:5001/healthcheck || exit 1"]
+      interval: 15s
+      timeout: 10s
+      retries: 12
+      start_period: 60s
+    deploy:
+      resources:
+        limits:
+          memory: 1G
+
+  marquez-web:
+    image: marquezproject/marquez-web:0.51.1
+    container_name: dq-marquez-web
+    profiles: ["observability"]
+    restart: unless-stopped
+    environment:
+      # All three are mandatory: setupProxy.js reads them with no fallback.
+      MARQUEZ_HOST: marquez
+      MARQUEZ_PORT: "5000"
+      WEB_PORT: "3000"
+    ports:
+      - "${MARQUEZ_HOST_WEB_PORT}:3000"
+    depends_on:
+      marquez:
+        condition: service_healthy
+    deploy:
+      resources:
+        limits:
+          memory: 256M
+
+  # =======================================================================
+  # Platform services (one image, three commands)
+  # =======================================================================
+  dq-exporter:
+    <<: *platform-build
+    container_name: dq-exporter
+    profiles: ["observability"]
+    restart: unless-stopped
+    command: ["python", "-m", "src.metrics.exporter"]
+    environment:
+      <<: *platform-env
+    volumes:
+      - ./src:/opt/dq/src:ro
+      - ./contracts:/opt/dq/contracts:ro
+      - ./dbt:/opt/dq/dbt
+      - ./tests:/opt/dq/tests:ro
+      - dq_artifacts:/opt/dq/artifacts
+      - gx_state:/opt/dq/gx
+    ports:
+      - "${DQ_EXPORTER_HOST_PORT}:9091"
+    depends_on:
+      postgres-platform:
+        condition: service_healthy
+      postgres-source:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "curl -fsS http://127.0.0.1:9091/metrics > /dev/null || exit 1"]
+      interval: 20s
+      timeout: 10s
+      retries: 6
+      start_period: 20s
+    deploy:
+      resources:
+        limits:
+          memory: 384M
+
+  dq-api:
+    <<: *platform-build
+    container_name: dq-api
+    profiles: ["observability"]
+    restart: unless-stopped
+    command:
+      ["uvicorn", "src.api.main:app", "--host", "0.0.0.0", "--port", "8000"]
+    environment:
+      <<: *platform-env
+    volumes:
+      - ./src:/opt/dq/src:ro
+      - ./contracts:/opt/dq/contracts:ro
+      # Writable: dbt needs to create target/ and logs/ here.
+      - ./dbt:/opt/dq/dbt
+      - ./tests:/opt/dq/tests:ro
+      - ./sql:/opt/dq/sql:ro
+      - dq_artifacts:/opt/dq/artifacts
+    ports:
+      - "${DQ_API_HOST_PORT}:8000"
+    depends_on:
+      postgres-platform:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "curl -fsS http://127.0.0.1:8000/health || exit 1"]
+      interval: 20s
+      timeout: 10s
+      retries: 6
+      start_period: 20s
+    deploy:
+      resources:
+        limits:
+          memory: 384M
+
+  alert-webhook:
+    <<: *platform-build
+    container_name: dq-alert-webhook
+    profiles: ["observability"]
+    restart: unless-stopped
+    command:
+      ["uvicorn", "src.webhook.receiver:app", "--host", "0.0.0.0", "--port", "8000"]
+    environment:
+      <<: *platform-env
+    volumes:
+      - ./src:/opt/dq/src:ro
+      - dq_artifacts:/opt/dq/artifacts
+    ports:
+      - "${ALERT_WEBHOOK_HOST_PORT}:8000"
+    depends_on:
+      postgres-platform:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "curl -fsS http://127.0.0.1:8000/health || exit 1"]
+      interval: 20s
+      timeout: 10s
+      retries: 6
+      start_period: 20s
+    deploy:
+      resources:
+        limits:
+          memory: 256M
+
+  # =======================================================================
+  # Metrics and dashboards
+  # =======================================================================
+  prometheus:
+    image: prom/prometheus:v3.16.0
+    container_name: dq-prometheus
+    profiles: ["observability"]
+    restart: unless-stopped
+    command:
+      - --config.file=/etc/prometheus/prometheus.yml
+      - --storage.tsdb.path=/prometheus
+      - --storage.tsdb.retention.time=15d
+      - --web.enable-lifecycle
+    volumes:
+      - ./prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - prometheus_data:/prometheus
+    ports:
+      - "${PROMETHEUS_HOST_PORT}:9090"
+    depends_on:
+      dq-exporter:
+        condition: service_started
+    healthcheck:
+      test: ["CMD-SHELL", "wget -q -O - http://127.0.0.1:9090/-/healthy > /dev/null || exit 1"]
+      interval: 20s
+      timeout: 10s
+      retries: 6
+      start_period: 20s
+    deploy:
+      resources:
+        limits:
+          memory: 512M
+
+  grafana:
+    image: grafana/grafana:13.3.1
+    container_name: dq-grafana
+    profiles: ["observability"]
+    restart: unless-stopped
+    environment:
+      # Only applied on the first initialisation of Grafana's own database.
+      # Changing it later needs the grafana_data volume recreated.
+      GF_SECURITY_ADMIN_USER: ${GRAFANA_ADMIN_USER}
+      GF_SECURITY_ADMIN_PASSWORD: ${GRAFANA_ADMIN_PASSWORD}
+      GF_USERS_ALLOW_SIGN_UP: "false"
+      GF_AUTH_ANONYMOUS_ENABLED: "false"
+      GF_DASHBOARDS_MIN_REFRESH_INTERVAL: "10s"
+      # Consumed by the provisioned datasources.
+      OBSERVABILITY_POSTGRES_HOST: postgres-platform
+      OBSERVABILITY_POSTGRES_PORT: "5432"
+      OBSERVABILITY_DB: ${OBSERVABILITY_DB}
+      OBSERVABILITY_DB_USER: ${OBSERVABILITY_DB_USER}
+      OBSERVABILITY_DB_PASSWORD: ${OBSERVABILITY_DB_PASSWORD}
+      ALERT_WEBHOOK_URL: http://alert-webhook:8000/alerts
+      ALERT_WEBHOOK_TOKEN: ${ALERT_WEBHOOK_TOKEN}
+    volumes:
+      - ./grafana/provisioning:/etc/grafana/provisioning:ro
+      - ./grafana/dashboards:/var/lib/grafana/dashboards:ro
+      - grafana_data:/var/lib/grafana
+    ports:
+      - "${GRAFANA_HOST_PORT}:3000"
+    depends_on:
+      prometheus:
+        condition: service_started
+      postgres-platform:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "curl -fsS http://127.0.0.1:3000/api/health || exit 1"]
+      interval: 20s
+      timeout: 10s
+      retries: 10
+      start_period: 40s
+    deploy:
+      resources:
+        limits:
+          memory: 384M
+
+volumes:
+  postgres_source_data:
+  postgres_platform_data:
+  minio_data:
+  airflow_logs:
+  airflow_auth:
+  dq_artifacts:
+  gx_state:
+  prometheus_data:
+  grafana_data:

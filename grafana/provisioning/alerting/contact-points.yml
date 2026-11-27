@@ -1,0 +1,36 @@
+# ===========================================================================
+# Grafana contact points
+# ===========================================================================
+# One webhook, pointing at this platform's own receiver. No external service
+# and no API key, so the alerting demo works offline - which is the whole
+# reason the receiver exists rather than a Slack or PagerDuty integration.
+#
+# The receiver records every delivery in alert_deliveries and deduplicates
+# retries, so "an alert was actually delivered" is a queryable fact.
+#
+# Two things learned the hard way here
+# ------------------------------------
+# 1. A `deleteContactPoints` block that removes the contact point a
+#    notification policy references makes provisioning fail validation with
+#    `contact points: [alerting.notifications.contact-points.referenced]`,
+#    and Grafana then REFUSES TO START AT ALL - not a warning, a boot
+#    failure. The block is gone.
+# 2. Grafana's webhook receiver sends credentials as an Authorization header
+#    (scheme + credentials), not as an arbitrary custom header, so the
+#    receiver accepts `Authorization: Bearer <token>` as well as its own
+#    X-DQ-Token.
+# ===========================================================================
+apiVersion: 1
+
+contactPoints:
+  - orgId: 1
+    name: dq-webhook
+    receivers:
+      - uid: dq-webhook
+        type: webhook
+        disableResolveMessage: false
+        settings:
+          url: ${ALERT_WEBHOOK_URL}
+          httpMethod: POST
+          authorization_scheme: Bearer
+          authorization_credentials: ${ALERT_WEBHOOK_TOKEN}

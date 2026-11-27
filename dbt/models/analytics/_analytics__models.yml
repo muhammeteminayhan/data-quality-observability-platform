@@ -1,0 +1,125 @@
+version: 2
+
+models:
+  - name: dim_customers
+    description: Customer dimension with order-derived attributes.
+    columns:
+      - name: customer_id
+        data_tests:
+          - not_null
+          - unique
+          - relationships:
+              arguments:
+                  to: ref('stg_customers')
+                  field: customer_id
+      - name: orders_total
+        data_tests:
+          - not_null
+      - name: has_ordered
+        data_tests:
+          - not_null
+
+  - name: dim_products
+    description: Product dimension with sales-derived attributes.
+    columns:
+      - name: product_id
+        data_tests:
+          - not_null
+          - unique
+      - name: category
+        data_tests:
+          - not_null
+          - accepted_values:
+              arguments:
+                  values: [electronics, home, fashion, sports, books]
+      - name: units_sold
+        data_tests:
+          - not_null
+
+  - name: fct_orders
+    description: >
+      Order-grain fact. items_total, settled_value and refunded_value are kept
+      separate so net revenue can be derived correctly and a refund is never
+      mistaken for a discrepancy.
+    columns:
+      - name: order_id
+        data_tests:
+          - not_null
+          - unique
+      - name: customer_id
+        data_tests:
+          - not_null
+          - relationships:
+              arguments:
+                  to: ref('dim_customers')
+                  field: customer_id
+      - name: order_status
+        data_tests:
+          - not_null
+          - accepted_values:
+              arguments:
+                  values: [pending, approved, processing, shipped, delivered, cancelled, returned]
+      - name: net_revenue
+        data_tests:
+          - not_null
+      - name: order_day
+        data_tests:
+          - not_null
+
+  - name: fct_order_items
+    description: Line-item fact enriched with order and product context.
+    columns:
+      - name: order_item_id
+        data_tests:
+          - not_null
+          - unique
+      - name: order_id
+        data_tests:
+          - not_null
+          - relationships:
+              arguments:
+                  to: ref('fct_orders')
+                  field: order_id
+      - name: product_id
+        data_tests:
+          - not_null
+          - relationships:
+              arguments:
+                  to: ref('dim_products')
+                  field: product_id
+      - name: line_total
+        data_tests:
+          - not_null
+
+  - name: agg_daily_sales
+    description: Daily sales by category, the warehouse twin of the lake dataset.
+    columns:
+      - name: sales_date
+        data_tests:
+          - not_null
+      - name: category
+        data_tests:
+          - not_null
+      - name: net_amount
+        data_tests:
+          - not_null
+      - name: order_count
+        data_tests:
+          - not_null
+
+  - name: agg_customer_lifetime
+    description: Lifetime value per customer, netted of refunds.
+    columns:
+      - name: customer_id
+        data_tests:
+          - not_null
+          - unique
+      - name: lifetime_value
+        data_tests:
+          - not_null
+      - name: lifecycle_stage
+        data_tests:
+          - not_null
+          - accepted_values:
+              arguments:
+                  values: [no_orders, one_off, repeat, loyal]

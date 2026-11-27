@@ -1,0 +1,180 @@
+# ===========================================================================
+# Contract: raw.customers
+# ===========================================================================
+dataset: raw.customers
+version: "1.0.0"
+owner: data-platform
+criticality: high
+layer: raw
+description: >
+  Customer master data. customer_id is the identity the orders reference;
+  customer_unique_id is deliberately coarser and is NOT asserted unique,
+  because one person legitimately holds several accounts.
+
+source:
+  type: postgres
+  location: raw.customers
+  ingestion_timestamp_column: _ingested_at
+
+  # NOTE on freshness and reference data
+  #
+  # `event_timestamp_column` is deliberately NOT set for this dataset.
+  #
+  # created_at is the date the record was first created upstream. For slowly
+  # changing reference data the newest record is routinely weeks old - that is
+  # normal, not stale. Measuring freshness from it reported this dataset as
+  # CRITICALLY stale on a perfectly healthy run (measured lag ~30 days against
+  # a 2-3 day threshold).
+  #
+  # What matters here is when the dataset was last REFRESHED, which is
+  # _ingested_at. The transaction tables (orders, payments) keep their event
+  # timestamp, because there an old newest-event genuinely means the feed has
+  # stopped delivering.
+freshness:
+  enabled: true
+  warning_after_minutes: 720
+  critical_after_minutes: 2880
+  on_missing_timestamp: WARNING
+
+volume:
+  enabled: true
+  min_rows: 500
+  severity: ERROR
+  baseline:
+    method: rolling_median_mad
+    window_days: 28
+    min_history_points: 5
+    warning_z: 3.5
+    critical_z: 6.0
+    same_day_type: false
+
+schema:
+  enforce: true
+  on_additive: INFO
+  on_type_change: CRITICAL
+  on_column_removal: CRITICAL
+  on_rename_candidate: ERROR
+  columns:
+    - name: ingestion_id
+      type: bigint
+      nullable: false
+    - name: customer_id
+      type: text
+      nullable: false
+    - name: customer_unique_id
+      type: text
+    - name: first_name
+      type: text
+    - name: last_name
+      type: text
+    - name: email
+      type: text
+      nullable: false
+    - name: phone
+      type: text
+    - name: city
+      type: text
+    - name: state
+      type: text
+      nullable: false
+    - name: zip_code
+      type: text
+    - name: country
+      type: text
+    - name: segment
+      type: text
+      nullable: false
+    - name: created_at
+      type: timestamp with time zone
+    - name: _ingested_at
+      type: timestamp with time zone
+      nullable: false
+    - name: _batch_id
+      type: text
+      nullable: false
+    - name: _source
+      type: text
+      nullable: false
+
+distribution:
+  enabled: true
+  min_sample_size: 500
+  severity: WARNING
+  categorical:
+    - column: segment
+      method: chi_square
+      alpha: 0.01
+      min_expected_frequency: 5
+    - column: state
+      method: chi_square
+      alpha: 0.01
+      min_expected_frequency: 5
+      max_categories: 20
+
+quality_rules:
+  - name: customer_id_not_null
+    dimension: completeness
+    severity: CRITICAL
+    expectation: expect_column_values_to_not_be_null
+    column: customer_id
+
+  - name: email_not_null
+    dimension: completeness
+    severity: ERROR
+    expectation: expect_column_values_to_not_be_null
+    column: email
+
+  - name: customer_id_unique
+    dimension: uniqueness
+    severity: CRITICAL
+    expectation: expect_column_values_to_be_unique
+    column: customer_id
+
+  - name: email_looks_like_an_address
+    dimension: validity
+    severity: WARNING
+    description: >
+      A deliberately loose shape check. Full RFC 5322 validation would reject
+      addresses that work, and the aim is to catch a broken upstream
+      transformation, not to police mailbox syntax.
+    expectation: expect_column_values_to_match_regex
+    column: email
+    kwargs:
+      regex: "^[^@[:space:]]+@[^@[:space:]]+\\.[^@[:space:]]+$"
+
+  - name: state_in_accepted_set
+    dimension: validity
+    severity: ERROR
+    expectation: expect_column_values_to_be_in_set
+    column: state
+    kwargs:
+      value_set:
+        [CA, NY, TX, FL, IL, PA, OH, GA, NC, MI, NJ, VA, WA, AZ, MA, TN, IN, MO, MD, WI]
+
+  - name: segment_in_accepted_set
+    dimension: validity
+    severity: ERROR
+    expectation: expect_column_values_to_be_in_set
+    column: segment
+    kwargs:
+      value_set: [consumer, small_business, enterprise]
+
+  - name: created_at_not_in_future
+    dimension: consistency
+    severity: ERROR
+    expectation: unexpected_rows
+    sql: |
+      SELECT customer_id, created_at
+      FROM {batch}
+      WHERE created_at > now() + interval '1 hour'
+
+score:
+  weights:
+    completeness: 0.30
+    uniqueness: 0.20
+    validity: 0.20
+    consistency: 0.10
+    freshness: 0.10
+    volume: 0.10
+  healthy_at: 90.0
+  degraded_at: 70.0

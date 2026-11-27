@@ -1,0 +1,288 @@
+{
+  "uid": "dq-schema-distribution",
+  "title": "3. Schema & Distribution",
+  "description": "Structural changes and statistical drift, with the uncertainty of each finding made explicit.",
+  "tags": [
+    "data-quality",
+    "schema",
+    "drift"
+  ],
+  "timezone": "utc",
+  "editable": false,
+  "schemaVersion": 39,
+  "version": 1,
+  "refresh": "30s",
+  "time": {
+    "from": "now-24h",
+    "to": "now"
+  },
+  "timepicker": {
+    "refresh_intervals": [
+      "10s",
+      "30s",
+      "1m",
+      "5m",
+      "15m"
+    ]
+  },
+  "panels": [
+    {
+      "type": "barchart",
+      "title": "Schema changes by classification",
+      "description": "ADDITIVE is routine. COLUMN_RENAME_CANDIDATE is a hypothesis, never a confirmed fact - a rename and a drop-plus-add are indistinguishable from the outside.",
+      "datasource": {
+        "type": "postgres",
+        "uid": "dq-observability"
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 10,
+        "x": 0,
+        "y": 0
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "postgres",
+            "uid": "dq-observability"
+          },
+          "format": "table",
+          "rawQuery": true,
+          "rawSql": "SELECT change_type AS \"change\", count(*) AS \"count\"\n                    FROM schema_changes GROUP BY change_type ORDER BY count(*) DESC",
+          "editorMode": "code"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "custom": {}
+        },
+        "overrides": []
+      },
+      "options": {
+        "orientation": "horizontal",
+        "legend": {
+          "showLegend": false
+        }
+      }
+    },
+    {
+      "type": "table",
+      "title": "Current schema fingerprint",
+      "description": "sha256 over the ordered (name, type, nullable) triples. A change here is a change in the contract surface, including a reordering.",
+      "datasource": {
+        "type": "postgres",
+        "uid": "dq-observability"
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 14,
+        "x": 10,
+        "y": 0
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "postgres",
+            "uid": "dq-observability"
+          },
+          "format": "table",
+          "rawQuery": true,
+          "rawSql": "SELECT d.dataset_name AS \"dataset\",\n                           left(s.fingerprint, 16) AS \"fingerprint\",\n                           s.column_count AS \"columns\", s.captured_at AS \"captured\"\n                    FROM (\n                      SELECT DISTINCT ON (dataset_id) *\n                      FROM schema_snapshots ORDER BY dataset_id, captured_at DESC\n                    ) s JOIN datasets d USING (dataset_id)\n                    ORDER BY d.dataset_name",
+          "editorMode": "code"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "custom": {}
+        },
+        "overrides": []
+      },
+      "options": {
+        "showHeader": true,
+        "cellHeight": "sm",
+        "footer": {
+          "show": false
+        }
+      }
+    },
+    {
+      "type": "table",
+      "title": "Detected schema changes",
+      "description": "`confidence` and `is_confirmed` only apply to rename candidates. The detector never sets is_confirmed - only a human or an explicit contract change can.",
+      "datasource": {
+        "type": "postgres",
+        "uid": "dq-observability"
+      },
+      "gridPos": {
+        "h": 9,
+        "w": 24,
+        "x": 0,
+        "y": 8
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "postgres",
+            "uid": "dq-observability"
+          },
+          "format": "table",
+          "rawQuery": true,
+          "rawSql": "SELECT sc.detected_at AS \"when\", d.dataset_name AS \"dataset\",\n                           sc.change_type AS \"change\", sc.column_name AS \"column\",\n                           COALESCE(sc.previous_column, '-') AS \"was\",\n                           COALESCE(sc.previous_type, '-') AS \"from_type\",\n                           COALESCE(sc.new_type, '-') AS \"to_type\",\n                           sc.confidence AS \"confidence\",\n                           sc.is_confirmed AS \"confirmed\",\n                           sc.severity AS \"severity\"\n                    FROM schema_changes sc JOIN datasets d USING (dataset_id)\n                    WHERE $__timeFilter(sc.detected_at)\n                    ORDER BY sc.detected_at DESC\n                    LIMIT 100",
+          "editorMode": "code"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "custom": {}
+        },
+        "overrides": []
+      },
+      "options": {
+        "showHeader": true,
+        "cellHeight": "sm",
+        "footer": {
+          "show": false
+        }
+      }
+    },
+    {
+      "type": "timeseries",
+      "title": "Drift statistic per column",
+      "description": "PSI for numeric columns, chi-square for categorical. An inconclusive test publishes NO statistic, so a gap here means the sample was below the contract minimum.",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "dq-prometheus"
+      },
+      "gridPos": {
+        "h": 9,
+        "w": 14,
+        "x": 0,
+        "y": 17
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "dq-prometheus"
+          },
+          "expr": "dq_distribution_statistic",
+          "legendFormat": "{{dataset}}.{{column}} ({{method}})",
+          "range": true,
+          "instant": false,
+          "editorMode": "code"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "custom": {}
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom",
+          "showLegend": true
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      }
+    },
+    {
+      "type": "stat",
+      "title": "Columns the drift test could not conclude on",
+      "description": "1 means the sample was too small on at least one side, so no drift is claimed. This is a first-class outcome, not an error.",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "dq-prometheus"
+      },
+      "gridPos": {
+        "h": 9,
+        "w": 10,
+        "x": 14,
+        "y": 17
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "dq-prometheus"
+          },
+          "expr": "sum(dq_distribution_inconclusive)",
+          "legendFormat": "inconclusive",
+          "range": false,
+          "instant": true,
+          "editorMode": "code"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "custom": {}
+        },
+        "overrides": []
+      },
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "textMode": "auto",
+        "graphMode": "none",
+        "colorMode": "value",
+        "justifyMode": "auto",
+        "orientation": "auto"
+      }
+    },
+    {
+      "type": "table",
+      "title": "Latest drift results",
+      "description": "`significant` is true only when the sample sizes met the minimum AND the statistic crossed a threshold. A large PSI on a tiny sample is never reported significant.",
+      "datasource": {
+        "type": "postgres",
+        "uid": "dq-observability"
+      },
+      "gridPos": {
+        "h": 10,
+        "w": 24,
+        "x": 0,
+        "y": 26
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "postgres",
+            "uid": "dq-observability"
+          },
+          "format": "table",
+          "rawQuery": true,
+          "rawSql": "SELECT d.dataset_name AS \"dataset\", dd.column_name AS \"column\",\n                           dd.method AS \"method\", dd.statistic AS \"statistic\",\n                           dd.p_value AS \"p_value\",\n                           dd.reference_sample_size AS \"n_ref\",\n                           dd.current_sample_size AS \"n_cur\",\n                           dd.min_sample_size AS \"n_min\",\n                           dd.status AS \"status\", dd.is_significant AS \"significant\"\n                    FROM (\n                      SELECT DISTINCT ON (dataset_id, column_name) *\n                      FROM distribution_drift\n                      ORDER BY dataset_id, column_name, evaluated_at DESC\n                    ) dd JOIN datasets d USING (dataset_id)\n                    ORDER BY dd.is_significant DESC, dd.statistic DESC NULLS LAST",
+          "editorMode": "code"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "custom": {}
+        },
+        "overrides": []
+      },
+      "options": {
+        "showHeader": true,
+        "cellHeight": "sm",
+        "footer": {
+          "show": false
+        }
+      }
+    }
+  ]
+}

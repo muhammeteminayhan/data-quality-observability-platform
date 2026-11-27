@@ -1,0 +1,72 @@
+# ===========================================================================
+# Marquez configuration (OpenLineage backend)
+# ===========================================================================
+# Mounted over /usr/src/app/marquez.yml and selected with MARQUEZ_CONFIG.
+#
+# Why a custom file instead of the image's marquez.dev.yml
+# -------------------------------------------------------
+# The bundled development config HARDCODES the database name, user and
+# password as `marquez`, substituting only POSTGRES_HOST and POSTGRES_PORT.
+# This platform stores Marquez's metadata in `marquez_db` on the shared
+# platform server with its own role and a password from .env, none of which
+# the bundled file can express. Marquez wraps its config source in a
+# Dropwizard EnvironmentVariableSubstitutor, so every ${VAR} below is
+# resolved from the container environment.
+#
+# search.enabled
+# --------------
+# The bundled config defaults `search.enabled` to TRUE and points it at an
+# OpenSearch host. Leaving that default would make Marquez repeatedly try to
+# reach a service this stack does not run. Full-text search over lineage is
+# not needed here - lineage is read through the API and the web UI - so it is
+# switched off explicitly rather than left to fail quietly.
+# ===========================================================================
+
+server:
+  applicationConnectors:
+    - type: http
+      port: ${MARQUEZ_PORT:-5000}
+      # Marquez's own default. Some OpenLineage clients send requests the
+      # strict RFC7230 parser rejects.
+      httpCompliance: RFC7230_LEGACY
+  adminConnectors:
+    - type: http
+      port: ${MARQUEZ_ADMIN_PORT:-5001}
+  requestLog:
+    appenders:
+      - type: console
+        # Lineage ingestion is chatty; the request log adds little here and
+        # makes the real migration/startup messages harder to find.
+        threshold: WARN
+
+db:
+  driverClass: org.postgresql.Driver
+  url: jdbc:postgresql://${POSTGRES_HOST}:${POSTGRES_PORT}/${POSTGRES_DB}
+  user: ${POSTGRES_USER}
+  password: ${POSTGRES_PASSWORD}
+  # The stack is small; a large pool would just hold idle connections on the
+  # shared platform server.
+  maxSize: 8
+  minSize: 2
+
+# Flyway runs on boot. Verified against postgres 18.7: all 91 migrations
+# apply. Flyway 8.5.13 (bundled in Marquez 0.51.1) logs
+# "PostgreSQL 18.7 is newer than this version of Flyway and support has not
+# been tested. The latest supported version of PostgreSQL is 14."
+# That warning is expected and is recorded as a known limitation in the README
+# rather than silenced.
+migrateOnStartup: true
+
+graphql:
+  enabled: true
+
+search:
+  enabled: false
+
+logging:
+  level: INFO
+  loggers:
+    marquez: INFO
+    org.flywaydb: INFO
+  appenders:
+    - type: console

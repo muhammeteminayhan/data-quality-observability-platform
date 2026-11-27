@@ -1,0 +1,47 @@
+
+=== 1. Platform Overview (01_platform_overview.json) ===
+  OK   [stat] Datasets monitored
+  OK   [stat] Unhealthy datasets
+  OK   [stat] Open incidents
+  OK   [gauge] Mean quality score
+  OK   [stat] Last gate decision
+  OK   [bargauge] Quality score per dataset (latest)
+  OK   [table] Dataset health
+  OK   [timeseries] Quality score over time
+  OK   [piechart] Pipeline runs by outcome
+  OK   [barchart] Rule failures by dimension
+  OK   [barchart] dbt: models executed vs assertions held
+
+=== 2. Freshness & Volume (02_freshness_and_volume.json) ===
+  OK   [timeseries] Freshness lag per dataset
+  OK   [table] Which clock was used
+  OK   [timeseries] Row count per dataset
+  OK   [timeseries] Volume deviation from the rolling median
+  OK   [table] Volume baseline detail
+  OK   [timeseries] Row count history with the expected band
+
+=== 3. Schema & Distribution (03_schema_and_distribution.json) ===
+  OK   [barchart] Schema changes by classification
+  OK   [table] Current schema fingerprint
+  OK   [table] Detected schema changes
+  OK   [timeseries] Drift statistic per column
+  OK   [stat] Columns the drift test could not conclude on
+  OK   [table] Latest drift results
+
+=== 4. Incidents & Reliability (04_incidents_and_reliability.json) ===
+  EMPTY [bargauge] Live incidents by severity
+         query returned no fields at all
+  EMPTY [stat] Oldest live incident
+         query returned no fields at all
+  OK   [piechart] Alert deliveries by outcome
+  OK   [table] Incidents
+  OK   [table] Incident lifecycle events
+  OK   [timeseries] Gate decisions over time
+  OK   [timeseries] Validation duration per dataset
+
+========================================================================
+panels: 28 ok, 2 empty, 0 wrong shape, 0 errored
+
+Empty panels (query ran, no rows - judge each one):
+  - 4. Incidents & Reliability / Live incidents by severity [bargauge]: query returned no fields at all
+  - 4. Incidents & Reliability / Oldest live incident [stat]: query returned no fields at all

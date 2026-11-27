@@ -1,0 +1,18 @@
+version: 2
+
+sources:
+  - name: raw
+    description: >
+      The permissive landing zone. NO tests are declared on these tables on
+      purpose: the raw layer is expected to contain bad rows, and asserting
+      otherwise would turn every detected data-quality incident into a red
+      dbt run that says nothing new. Quality is asserted on the staging and
+      analytics models below, and by the Great Expectations suites, which
+      report severity instead of a single pass/fail.
+    schema: raw
+    tables:
+      - name: customers
+      - name: products
+      - name: orders
+      - name: order_items
+      - name: payments

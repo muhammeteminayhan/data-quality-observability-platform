@@ -1,0 +1,30 @@
+[project]
+name = "data-quality-observability-platform"
+version = "1.0.0"
+description = "Centralized data quality and observability platform"
+requires-python = ">=3.12"
+
+[tool.ruff]
+line-length = 100
+target-version = "py312"
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I", "UP", "B", "C4", "SIM"]
+ignore = ["E501"]
+
+[tool.ruff.lint.per-file-ignores]
+"tests/*" = ["B011"]
+# UP042 would rewrite `class Severity(str, Enum)` as a StrEnum. That is the
+# modern spelling, but it changes what `str(Severity.INFO)` and an f-string
+# without `.value` produce, and these values are written to observability_db,
+# emitted as Prometheus labels and compared in the gate. The enum and every
+# call site are verified working against the live stack, so the rule is
+# silenced here deliberately rather than taking a cosmetic risk.
+"src/common/severity.py" = ["UP042"]
+
+[tool.coverage.run]
+source = ["src"]
+omit = ["*/__init__.py"]
+
+[tool.coverage.report]
+show_missing = true

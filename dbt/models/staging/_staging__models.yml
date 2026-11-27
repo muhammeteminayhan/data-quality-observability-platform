@@ -1,0 +1,169 @@
+version: 2
+
+models:
+  - name: stg_customers
+    config:
+      meta:
+        dq_dataset: raw.customers
+    description: Cleaned, deduplicated customers. One row per customer_id.
+    columns:
+      - name: customer_id
+        description: Business key. Unique here, unlike in the raw layer.
+        data_tests:
+          - not_null
+          - unique
+      - name: email
+        data_tests:
+          - not_null
+      - name: state
+        data_tests:
+          - accepted_values:
+              arguments:
+                  values: [CA, NY, TX, FL, IL, PA, OH, GA, NC, MI, NJ, VA, WA, AZ, MA, TN, IN, MO, MD, WI]
+      - name: segment
+        data_tests:
+          - not_null
+          - accepted_values:
+              arguments:
+                values: [consumer, small_business, enterprise]
+      - name: source_ingestion_id
+        data_tests:
+          - unique
+
+  - name: stg_products
+    config:
+      meta:
+        dq_dataset: raw.products
+    description: Cleaned, deduplicated products with a derived margin rate.
+    columns:
+      - name: product_id
+        data_tests:
+          - not_null
+          - unique
+      - name: category
+        data_tests:
+          - not_null
+          - accepted_values:
+              arguments:
+                  values: [electronics, home, fashion, sports, books]
+      - name: price
+        data_tests:
+          - not_null
+          # dbt_utils is not installed on purpose - this project has no
+          # package dependencies - so a range check is a singular test
+          # (tests/assert_product_prices_positive.sql).
+      - name: margin_rate
+        description: >
+          NULL where cost is unknown. Deliberately not tested for a range:
+          clearance pricing legitimately produces a negative margin.
+
+  - name: stg_orders
+    config:
+      meta:
+        dq_dataset: raw.orders
+    description: >
+      Cleaned orders. Referentially complete by construction - the model joins
+      stg_customers, so an order whose customer was rejected is rejected too.
+    columns:
+      - name: order_id
+        data_tests:
+          - not_null
+          - unique
+      - name: customer_id
+        data_tests:
+          - not_null
+          - relationships:
+              arguments:
+                  to: ref('stg_customers')
+                  field: customer_id
+      - name: order_status
+        data_tests:
+          - not_null
+          - accepted_values:
+              arguments:
+                  values: [pending, approved, processing, shipped, delivered, cancelled, returned]
+      - name: total_amount
+        data_tests:
+          - not_null
+      - name: is_fulfilled
+        data_tests:
+          - not_null
+
+  - name: stg_order_items
+    config:
+      meta:
+        dq_dataset: raw.order_items
+    description: Cleaned line items, referentially complete to orders and products.
+    columns:
+      - name: order_item_id
+        data_tests:
+          - not_null
+          - unique
+      - name: order_id
+        data_tests:
+          - not_null
+          - relationships:
+              arguments:
+                  to: ref('stg_orders')
+                  field: order_id
+      - name: product_id
+        data_tests:
+          - not_null
+          - relationships:
+              arguments:
+                  to: ref('stg_products')
+                  field: product_id
+      - name: quantity
+        data_tests:
+          - not_null
+      - name: line_total
+        data_tests:
+          - not_null
+
+  - name: stg_payments
+    config:
+      meta:
+        dq_dataset: raw.payments
+    description: >
+      Cleaned payments. payment_value may be negative: a refund is a real
+      negative payment, so the sign is validated against the type instead.
+    columns:
+      - name: payment_id
+        data_tests:
+          - not_null
+          - unique
+      - name: order_id
+        data_tests:
+          - not_null
+          - relationships:
+              arguments:
+                  to: ref('stg_orders')
+                  field: order_id
+      - name: payment_type
+        data_tests:
+          - not_null
+          - accepted_values:
+              arguments:
+                  values: [credit_card, debit_card, bank_transfer, voucher, wallet, refund]
+      - name: payment_value
+        data_tests:
+          - not_null
+      - name: is_refund
+        data_tests:
+          - not_null
+
+  - name: stg_rejected_rows
+    description: >
+      Every row the staging layer dropped, with the reason. On clean data this
+      model is empty; that emptiness is itself the assertion, which is why
+      there is a singular test on it rather than a column test.
+    columns:
+      - name: source_table
+        data_tests:
+          - not_null
+          - accepted_values:
+              arguments:
+                  values: ["raw.customers", "raw.products", "raw.orders", "raw.order_items", "raw.payments"]
+      - name: reject_reason
+        data_tests:
+          - not_null

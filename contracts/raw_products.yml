@@ -1,0 +1,162 @@
+# ===========================================================================
+# Contract: raw.products
+# ===========================================================================
+dataset: raw.products
+version: "1.0.0"
+owner: data-platform
+criticality: high
+layer: raw
+description: >
+  Product catalogue. Reference data: it changes slowly, so its volume baseline
+  is flat and its freshness window is generous compared with the transaction
+  tables.
+
+source:
+  type: postgres
+  location: raw.products
+  ingestion_timestamp_column: _ingested_at
+
+  # NOTE on freshness and reference data
+  #
+  # `event_timestamp_column` is deliberately NOT set for this dataset.
+  #
+  # created_at is the date the record was first created upstream. For slowly
+  # changing reference data the newest record is routinely weeks old - that is
+  # normal, not stale. Measuring freshness from it reported this dataset as
+  # CRITICALLY stale on a perfectly healthy run (measured lag ~30 days against
+  # a 2-3 day threshold).
+  #
+  # What matters here is when the dataset was last REFRESHED, which is
+  # _ingested_at. The transaction tables (orders, payments) keep their event
+  # timestamp, because there an old newest-event genuinely means the feed has
+  # stopped delivering.
+freshness:
+  enabled: true
+  # Reference data legitimately goes a day without changing.
+  warning_after_minutes: 1440
+  critical_after_minutes: 4320
+  on_missing_timestamp: WARNING
+
+volume:
+  enabled: true
+  min_rows: 100
+  severity: ERROR
+  baseline:
+    method: rolling_median_mad
+    window_days: 28
+    min_history_points: 5
+    warning_z: 3.5
+    critical_z: 6.0
+    # A catalogue does not care which day of the week it is.
+    same_day_type: false
+
+schema:
+  enforce: true
+  on_additive: INFO
+  on_type_change: CRITICAL
+  on_column_removal: CRITICAL
+  on_rename_candidate: ERROR
+  columns:
+    - name: ingestion_id
+      type: bigint
+      nullable: false
+    - name: product_id
+      type: text
+      nullable: false
+    - name: product_name
+      type: text
+    - name: category
+      type: text
+      nullable: false
+    - name: subcategory
+      type: text
+    - name: price
+      type: numeric
+      nullable: false
+    - name: cost
+      type: numeric
+    - name: weight_kg
+      type: numeric
+    - name: is_active
+      type: boolean
+    - name: created_at
+      type: timestamp with time zone
+    - name: _ingested_at
+      type: timestamp with time zone
+      nullable: false
+    - name: _batch_id
+      type: text
+      nullable: false
+    - name: _source
+      type: text
+      nullable: false
+
+distribution:
+  enabled: true
+  min_sample_size: 500
+  severity: WARNING
+  numeric:
+    - column: price
+      method: psi
+      bins: 10
+      warning: 0.10
+      critical: 0.25
+  categorical:
+    - column: category
+      method: chi_square
+      alpha: 0.01
+      min_expected_frequency: 5
+
+quality_rules:
+  - name: product_id_not_null
+    dimension: completeness
+    severity: CRITICAL
+    expectation: expect_column_values_to_not_be_null
+    column: product_id
+
+  - name: product_id_unique
+    dimension: uniqueness
+    severity: CRITICAL
+    expectation: expect_column_values_to_be_unique
+    column: product_id
+
+  - name: price_is_positive
+    dimension: validity
+    severity: ERROR
+    expectation: expect_column_values_to_be_between
+    column: price
+    kwargs:
+      min_value: 0.01
+      max_value: 100000
+
+  - name: category_in_accepted_set
+    dimension: validity
+    severity: ERROR
+    expectation: expect_column_values_to_be_in_set
+    column: category
+    kwargs:
+      value_set: [electronics, home, fashion, sports, books]
+
+  - name: cost_not_above_price
+    dimension: consistency
+    severity: WARNING
+    description: >
+      Selling below cost happens in real catalogues (clearance), so this is a
+      warning rather than an error. It is a SQL rule because it compares two
+      columns of the same row.
+    expectation: unexpected_rows
+    sql: |
+      SELECT product_id, price, cost
+      FROM {batch}
+      WHERE price IS NOT NULL AND cost IS NOT NULL AND cost > price
+
+score:
+  weights:
+    completeness: 0.25
+    uniqueness: 0.20
+    validity: 0.25
+    consistency: 0.10
+    freshness: 0.10
+    volume: 0.10
+  healthy_at: 90.0
+  degraded_at: 70.0

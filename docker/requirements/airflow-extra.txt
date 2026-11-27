@@ -1,0 +1,17 @@
+# ---------------------------------------------------------------------------
+# Providers layered on top of apache/airflow:3.3.1-python3.12.
+#
+# The base image already ships apache-airflow-providers-openlineage 2.20.0.
+# 2.21.0 is the version the project targets; it requires only
+# `apache-airflow>=2.11.0`, `openlineage-python>=1.52.0` and
+# `openlineage-integration-common>=1.52.0`, all of which Airflow 3.3.1 already
+# satisfies, so the bump changes nothing else (verified with a pip dry-run
+# report diffed against the image's own `pip freeze`).
+#
+# apache-airflow-providers-postgres is pinned to 7.0.1 because that is the
+# version Airflow 3.3.1's constraint file was tested against. 7.1.2 is newer
+# but untested against this Airflow release.
+# ---------------------------------------------------------------------------
+
+apache-airflow-providers-openlineage==2.21.0
+apache-airflow-providers-postgres==7.0.1

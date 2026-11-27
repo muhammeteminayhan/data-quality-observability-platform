@@ -1,0 +1,168 @@
+# ===========================================================================
+# Contract: daily_sales (Parquet in MinIO)
+# ===========================================================================
+dataset: daily_sales
+version: "1.0.0"
+owner: analytics-platform
+criticality: high
+layer: lake
+description: >
+  Sales aggregated to (date, category, subcategory) and stored as Parquet at
+  s3://<bucket>/daily_sales/dt=YYYY-MM-DD/. One row per category combination,
+  so the row count is small and nearly constant - which makes a volume drop
+  here very easy to see and a baseline with a wide tolerance inappropriate.
+
+source:
+  type: parquet
+  location: daily_sales
+  event_timestamp_column: event_ts
+  ingestion_timestamp_column: ingested_at
+  partition_column: dt
+
+freshness:
+  enabled: true
+  warning_after_minutes: 1500
+  critical_after_minutes: 2880
+  on_missing_timestamp: CRITICAL
+
+volume:
+  enabled: true
+  # 5 categories x 4 subcategories = 20 combinations when every category sold.
+  min_rows: 5
+  max_rows: 500
+  severity: CRITICAL
+  baseline:
+    method: rolling_median_mad
+    window_days: 28
+    min_history_points: 5
+    warning_z: 3.0
+    critical_z: 5.0
+    same_day_type: false
+
+schema:
+  enforce: true
+  on_additive: INFO
+  on_type_change: CRITICAL
+  on_column_removal: CRITICAL
+  on_rename_candidate: ERROR
+  columns:
+    - name: event_date
+      type: date
+      nullable: false
+    - name: category
+      type: string
+      nullable: false
+    - name: subcategory
+      type: string
+      nullable: false
+    - name: units_sold
+      type: int64
+      nullable: false
+    - name: gross_amount
+      type: double
+      nullable: false
+    - name: discount_amount
+      type: double
+    - name: net_amount
+      type: double
+      nullable: false
+    - name: order_count
+      type: int64
+      nullable: false
+    - name: avg_order_value
+      type: double
+    - name: event_ts
+      type: timestamptz
+      nullable: false
+    - name: ingested_at
+      type: timestamptz
+      nullable: false
+    - name: batch_id
+      type: string
+      nullable: false
+
+distribution:
+  enabled: true
+  # Only 20 rows per partition, so a drift test here would be statistically
+  # meaningless. The minimum is set above the real row count on purpose: the
+  # drift module will report `inconclusive` rather than invent a finding.
+  min_sample_size: 500
+  severity: WARNING
+  numeric:
+    - column: net_amount
+      method: psi
+      bins: 10
+      warning: 0.10
+      critical: 0.25
+
+quality_rules:
+  - name: category_not_null
+    dimension: completeness
+    severity: CRITICAL
+    expectation: expect_column_values_to_not_be_null
+    column: category
+
+  - name: net_amount_not_null
+    dimension: completeness
+    severity: CRITICAL
+    expectation: expect_column_values_to_not_be_null
+    column: net_amount
+
+  - name: category_subcategory_unique
+    dimension: uniqueness
+    severity: ERROR
+    description: One row per category and subcategory within a partition.
+    expectation: expect_compound_columns_to_be_unique
+    kwargs:
+      column_list: [event_date, category, subcategory]
+
+  - name: units_sold_non_negative
+    dimension: validity
+    severity: ERROR
+    expectation: expect_column_values_to_be_between
+    column: units_sold
+    kwargs:
+      min_value: 0
+      max_value: 10000000
+
+  - name: net_amount_non_negative
+    dimension: validity
+    severity: ERROR
+    expectation: expect_column_values_to_be_between
+    column: net_amount
+    kwargs:
+      min_value: 0
+      max_value: 100000000
+
+  - name: order_count_positive
+    dimension: validity
+    severity: ERROR
+    expectation: expect_column_values_to_be_between
+    column: order_count
+    kwargs:
+      min_value: 1
+      max_value: 10000000
+
+  - name: category_in_accepted_set
+    dimension: validity
+    severity: ERROR
+    description: >
+      `unknown` is included because the aggregation assigns it to line items
+      whose product could not be resolved. Excluding it would make a
+      referential-integrity problem surface here as a validity failure,
+      pointing at the wrong dataset.
+    expectation: expect_column_values_to_be_in_set
+    column: category
+    kwargs:
+      value_set: [electronics, home, fashion, sports, books, unknown]
+
+score:
+  weights:
+    completeness: 0.25
+    uniqueness: 0.15
+    validity: 0.20
+    consistency: 0.10
+    freshness: 0.15
+    volume: 0.15
+  healthy_at: 90.0
+  degraded_at: 70.0

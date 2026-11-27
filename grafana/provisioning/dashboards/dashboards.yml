@@ -1,0 +1,15 @@
+apiVersion: 1
+
+providers:
+  - name: data-quality
+    orgId: 1
+    folder: Data Quality
+    type: file
+    # The JSON files are the source of truth, so UI edits are not persisted.
+    # A dashboard that can drift by hand is a dashboard nobody can reproduce.
+    disableDeletion: false
+    allowUiUpdates: false
+    updateIntervalSeconds: 30
+    options:
+      path: /var/lib/grafana/dashboards
+      foldersFromFilesStructure: false

@@ -1,0 +1,57 @@
+# ===========================================================================
+# Grafana datasources
+# ===========================================================================
+# Two datasources on purpose, because they answer different questions:
+#
+#   Prometheus  the operational view - is the platform running, how long do
+#               checks take, how many failures per dataset right now. Low
+#               cardinality, short retention, good at rates and alerting.
+#
+#   PostgreSQL  the business view - per-run scores with the contract version
+#               that produced them, incident timelines, per-rule results,
+#               gate decisions. Anything that must stay queryable for months
+#               or be joined to a dataset or an incident.
+#
+# A dashboard that only had Prometheus could not show "which rule failed on
+# raw.orders in run X", and one that only had Postgres could not alert on a
+# rate. Both are provisioned so neither question needs a workaround.
+# ===========================================================================
+apiVersion: 1
+
+deleteDatasources:
+  - name: Prometheus
+    orgId: 1
+  - name: ObservabilityDB
+    orgId: 1
+
+datasources:
+  - name: Prometheus
+    uid: dq-prometheus
+    type: prometheus
+    access: proxy
+    url: http://prometheus:9090
+    isDefault: true
+    editable: false
+    jsonData:
+      httpMethod: POST
+      # Must match prometheus.yml's scrape_interval, or Grafana picks step
+      # values that produce gaps on short ranges.
+      timeInterval: 15s
+
+  - name: ObservabilityDB
+    uid: dq-observability
+    type: postgres
+    access: proxy
+    url: ${OBSERVABILITY_POSTGRES_HOST}:${OBSERVABILITY_POSTGRES_PORT}
+    user: ${OBSERVABILITY_DB_USER}
+    database: ${OBSERVABILITY_DB}
+    editable: false
+    secureJsonData:
+      password: ${OBSERVABILITY_DB_PASSWORD}
+    jsonData:
+      sslmode: disable
+      postgresVersion: 1800
+      timescaledb: false
+      maxOpenConns: 5
+      maxIdleConns: 2
+      connMaxLifetime: 14400

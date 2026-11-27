@@ -1,0 +1,68 @@
+# ---------------------------------------------------------------------------
+# Secrets
+# ---------------------------------------------------------------------------
+# .env holds real passwords. Only the placeholder template is tracked.
+.env
+.env.*
+!.env.example
+
+# ---------------------------------------------------------------------------
+# Generated data
+# ---------------------------------------------------------------------------
+# Git never descends into an excluded directory, so `data/` + `!data/.gitkeep`
+# silently fails. The directory must be kept and its contents excluded, one
+# level at a time.
+data/*
+!data/.gitkeep
+!data/parquet/
+data/parquet/*
+!data/parquet/.gitkeep
+
+# Validation / run artifacts
+artifacts/*
+!artifacts/.gitkeep
+gx/uncommitted/
+great_expectations/uncommitted/
+
+# dbt
+dbt/target/
+dbt/dbt_packages/
+dbt/logs/
+.user.yml
+
+# Airflow runtime
+airflow/logs/
+airflow/airflow.db
+airflow/airflow.cfg
+airflow/webserver_config.py
+airflow/simple_auth_manager_passwords.json.generated
+airflow/.airflowignore.generated
+
+# ---------------------------------------------------------------------------
+# Python
+# ---------------------------------------------------------------------------
+__pycache__/
+*.py[cod]
+*.egg-info/
+.eggs/
+build/
+dist/
+.venv/
+venv/
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+.coverage
+.coverage.*
+coverage.xml
+htmlcov/
+
+# ---------------------------------------------------------------------------
+# Editors / OS
+# ---------------------------------------------------------------------------
+.idea/
+.vscode/
+*.swp
+Thumbs.db
+desktop.ini
+.DS_Store

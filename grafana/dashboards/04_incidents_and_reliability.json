@@ -1,0 +1,348 @@
+{
+  "uid": "dq-incidents",
+  "title": "4. Incidents & Reliability",
+  "description": "Incident lifecycle, alert delivery and gate history - the evidence trail behind every closed incident.",
+  "tags": [
+    "data-quality",
+    "incidents",
+    "reliability"
+  ],
+  "timezone": "utc",
+  "editable": false,
+  "schemaVersion": 39,
+  "version": 1,
+  "refresh": "30s",
+  "time": {
+    "from": "now-24h",
+    "to": "now"
+  },
+  "timepicker": {
+    "refresh_intervals": [
+      "10s",
+      "30s",
+      "1m",
+      "5m",
+      "15m"
+    ]
+  },
+  "panels": [
+    {
+      "type": "bargauge",
+      "title": "Live incidents by severity",
+      "description": "",
+      "datasource": {
+        "type": "postgres",
+        "uid": "dq-observability"
+      },
+      "gridPos": {
+        "h": 7,
+        "w": 8,
+        "x": 0,
+        "y": 0
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "postgres",
+            "uid": "dq-observability"
+          },
+          "format": "table",
+          "rawQuery": true,
+          "rawSql": "SELECT severity AS metric, count(*) AS value\n                    FROM incidents\n                    WHERE status IN ('OPEN','ACKNOWLEDGED','SUPPRESSED')\n                    GROUP BY severity\n                    ORDER BY CASE severity\n                        WHEN 'CRITICAL' THEN 0 WHEN 'ERROR' THEN 1\n                        WHEN 'WARNING' THEN 2 ELSE 3 END",
+          "editorMode": "code"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "custom": {}
+        },
+        "overrides": []
+      },
+      "options": {
+        "displayMode": "gradient",
+        "orientation": "horizontal",
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        }
+      }
+    },
+    {
+      "type": "stat",
+      "title": "Oldest live incident",
+      "description": "By severity. A CRITICAL that has been open for days is the story.",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "dq-prometheus"
+      },
+      "gridPos": {
+        "h": 7,
+        "w": 8,
+        "x": 8,
+        "y": 0
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "dq-prometheus"
+          },
+          "expr": "dq_oldest_open_incident_seconds",
+          "legendFormat": "{{severity}}",
+          "range": false,
+          "instant": true,
+          "editorMode": "code"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "custom": {},
+          "unit": "s"
+        },
+        "overrides": []
+      },
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "textMode": "auto",
+        "graphMode": "none",
+        "colorMode": "value",
+        "justifyMode": "auto",
+        "orientation": "auto"
+      }
+    },
+    {
+      "type": "piechart",
+      "title": "Alert deliveries by outcome",
+      "description": "`duplicate` proves the receiver is deduplicating retries rather than handling one alert many times. `failed` means a delivery was attempted and recorded as lost, not silently dropped.",
+      "datasource": {
+        "type": "postgres",
+        "uid": "dq-observability"
+      },
+      "gridPos": {
+        "h": 7,
+        "w": 8,
+        "x": 16,
+        "y": 0
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "postgres",
+            "uid": "dq-observability"
+          },
+          "format": "table",
+          "rawQuery": true,
+          "rawSql": "SELECT status AS metric, count(*) AS value FROM alert_deliveries GROUP BY status ORDER BY status",
+          "editorMode": "code"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "custom": {}
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "right",
+          "showLegend": true
+        },
+        "pieType": "donut",
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        }
+      }
+    },
+    {
+      "type": "table",
+      "title": "Incidents",
+      "description": "`occurrences` rising with no new alert means the cooldown is working. A RESOLVED incident always carries the note recording how many verified healthy measurements closed it.",
+      "datasource": {
+        "type": "postgres",
+        "uid": "dq-observability"
+      },
+      "gridPos": {
+        "h": 10,
+        "w": 24,
+        "x": 0,
+        "y": 7
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "postgres",
+            "uid": "dq-observability"
+          },
+          "format": "table",
+          "rawQuery": true,
+          "rawSql": "SELECT i.incident_id AS \"id\", d.dataset_name AS \"dataset\",\n                           i.detector AS \"detector\", i.severity AS \"severity\",\n                           i.status AS \"status\", i.occurrence_count AS \"occurrences\",\n                           i.first_seen_at AS \"first_seen\",\n                           i.last_seen_at AS \"last_seen\",\n                           COALESCE(i.resolution_note, '-') AS \"resolution\",\n                           left(i.title, 60) AS \"title\"\n                    FROM incidents i JOIN datasets d USING (dataset_id)\n                    ORDER BY\n                        CASE i.status WHEN 'RESOLVED' THEN 1 ELSE 0 END,\n                        CASE i.severity\n                            WHEN 'CRITICAL' THEN 0 WHEN 'ERROR' THEN 1\n                            WHEN 'WARNING' THEN 2 ELSE 3 END,\n                        i.last_seen_at DESC\n                    LIMIT 100",
+          "editorMode": "code"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "custom": {}
+        },
+        "overrides": []
+      },
+      "options": {
+        "showHeader": true,
+        "cellHeight": "sm",
+        "footer": {
+          "show": false
+        }
+      }
+    },
+    {
+      "type": "table",
+      "title": "Incident lifecycle events",
+      "description": "The audit trail. HEALTHY_CHECK rows are the positive evidence a resolution requires - an incident is never closed because its alert went quiet.",
+      "datasource": {
+        "type": "postgres",
+        "uid": "dq-observability"
+      },
+      "gridPos": {
+        "h": 10,
+        "w": 24,
+        "x": 0,
+        "y": 17
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "postgres",
+            "uid": "dq-observability"
+          },
+          "format": "table",
+          "rawQuery": true,
+          "rawSql": "SELECT e.occurred_at AS \"when\", e.incident_id AS \"incident\",\n                           e.event_type AS \"event\",\n                           COALESCE(e.from_status, '-') AS \"from\",\n                           COALESCE(e.to_status, '-') AS \"to\",\n                           e.actor AS \"actor\", left(e.detail, 90) AS \"detail\"\n                    FROM incident_events e\n                    WHERE $__timeFilter(e.occurred_at)\n                    ORDER BY e.occurred_at DESC\n                    LIMIT 150",
+          "editorMode": "code"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "custom": {}
+        },
+        "overrides": []
+      },
+      "options": {
+        "showHeader": true,
+        "cellHeight": "sm",
+        "footer": {
+          "show": false
+        }
+      }
+    },
+    {
+      "type": "timeseries",
+      "title": "Gate decisions over time",
+      "description": "Every PASS, PASS_WITH_WARNINGS and FAIL the gate has made.",
+      "datasource": {
+        "type": "postgres",
+        "uid": "dq-observability"
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 0,
+        "y": 27
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "postgres",
+            "uid": "dq-observability"
+          },
+          "format": "time_series",
+          "rawQuery": true,
+          "rawSql": "SELECT g.decided_at AS time, g.decision AS metric,\n                           1 AS value\n                    FROM gate_decisions g\n                    WHERE $__timeFilter(g.decided_at)\n                    ORDER BY g.decided_at",
+          "editorMode": "code"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "custom": {}
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom",
+          "showLegend": true
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      }
+    },
+    {
+      "type": "timeseries",
+      "title": "Validation duration per dataset",
+      "description": "How long the quality checks themselves take.",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "dq-prometheus"
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 12,
+        "y": 27
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "dq-prometheus"
+          },
+          "expr": "dq_validation_duration_milliseconds_avg",
+          "legendFormat": "{{dataset}}",
+          "range": true,
+          "instant": false,
+          "editorMode": "code"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "custom": {},
+          "unit": "ms"
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom",
+          "showLegend": true
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      }
+    }
+  ]
+}

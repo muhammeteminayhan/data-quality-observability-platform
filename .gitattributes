@@ -1,0 +1,26 @@
+# Force LF for every text file.
+#
+# Without this, Git for Windows checks shell scripts out with CRLF and the
+# container refuses them with `bad interpreter: /bin/bash^M`. SQL files fed to
+# psql and YAML read by the contract engine are affected the same way.
+* text=auto eol=lf
+
+*.sh      text eol=lf
+*.sql     text eol=lf
+*.py      text eol=lf
+*.yml     text eol=lf
+*.yaml    text eol=lf
+*.json    text eol=lf
+*.md      text eol=lf
+*.cfg     text eol=lf
+*.toml    text eol=lf
+*.env     text eol=lf
+Dockerfile text eol=lf
+
+# Binary assets must never be line-ending converted.
+*.png     binary
+*.jpg     binary
+*.jpeg    binary
+*.gif     binary
+*.pdf     binary
+*.parquet binary

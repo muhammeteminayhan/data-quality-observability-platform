@@ -1,0 +1,61 @@
+# ===========================================================================
+# dbt project: the transformation layer that is monitored
+# ===========================================================================
+# This project is deliberately standalone. It reads the permissive `raw`
+# schema and builds `staging` and `analytics`, where quality IS enforced.
+#
+# The platform does not trust dbt's own exit code as evidence of correctness:
+# `dbt run` succeeding means the SQL executed, not that the output is right.
+# That is why the models are paired with dbt tests, why those test results are
+# parsed into observability_db separately from the model results, and why the
+# Great Expectations suites run against the outputs as well.
+# ===========================================================================
+name: commerce_dq
+version: "1.0.0"
+config-version: 2
+
+profile: commerce_dq
+
+model-paths: ["models"]
+test-paths: ["tests"]
+macro-paths: ["macros"]
+target-path: "target"
+clean-targets: ["target", "dbt_packages"]
+
+# Fail fast on anything unexpected rather than warning and carrying on.
+require-dbt-version: [">=1.12.0", "<2.0.0"]
+
+vars:
+  # Tolerance for money comparisons, matching the contracts. Every component
+  # is rounded to cents independently, so an exact equality test would fail on
+  # correct data.
+  rounding_tolerance: 0.02
+  # Statuses that mean the order was fulfilled.
+  fulfilled_statuses: ["shipped", "delivered"]
+  # Accepted enum domains, kept here so a model and its test cannot disagree.
+  order_statuses:
+    ["pending", "approved", "processing", "shipped", "delivered", "cancelled", "returned"]
+  payment_types:
+    ["credit_card", "debit_card", "bank_transfer", "voucher", "wallet", "refund"]
+  customer_segments: ["consumer", "small_business", "enterprise"]
+  product_categories: ["electronics", "home", "fashion", "sports", "books"]
+
+models:
+  commerce_dq:
+    +materialized: view
+    staging:
+      +schema: staging
+      # Tables, not views: the staging layer is read repeatedly by the
+      # analytics models and by the GX suites, and re-running the
+      # deduplication window function on every read is wasteful.
+      +materialized: table
+    analytics:
+      +schema: analytics
+      +materialized: table
+
+tests:
+  commerce_dq:
+    # Store the offending rows so a failing test can be inspected rather than
+    # only counted. Without this a dbt failure is a number with no evidence.
+    +store_failures: true
+    +schema: dbt_test_failures

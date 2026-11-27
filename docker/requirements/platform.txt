@@ -1,0 +1,69 @@
+# ---------------------------------------------------------------------------
+# Platform runtime requirements: data generator, contract engine, Great
+# Expectations validation, observability engine, Prometheus exporter, read API
+# and alert webhook receiver.
+#
+# Installed into BOTH images:
+#   * docker/platform/Dockerfile  (python:3.12.16-slim-trixie)
+#   * docker/airflow/Dockerfile   (apache/airflow:3.3.1-python3.12)
+#
+# Every pin was checked against PyPI and then resolved inside the Airflow image.
+# The versions below that also appear in Airflow 3.3.1's own constraint file
+# (numpy, pandas, scipy, psycopg, pyarrow, boto3, fastapi, uvicorn, PyYAML,
+# pydantic, openlineage-python) are pinned to EXACTLY the constrained value, so
+# installing this file into the Airflow image moves nothing Airflow depends on.
+#
+# dbt is deliberately NOT here - see docker/requirements/dbt.txt for why.
+# ---------------------------------------------------------------------------
+
+# --- Data quality validation -----------------------------------------------
+# Great Expectations Core 1.x. The `postgresql` extra adds sqlalchemy +
+# psycopg2-binary, both already at Airflow's constrained versions.
+great-expectations[postgresql]==1.25.0
+
+# --- Deterministic synthetic data ------------------------------------------
+faker==40.63.0
+
+# --- Object storage (MinIO speaks the S3 API) ------------------------------
+boto3==1.43.56
+
+# --- Parquet ---------------------------------------------------------------
+pyarrow==25.0.0
+
+# --- Metrics ---------------------------------------------------------------
+prometheus-client==0.26.0
+
+# --- Lineage ---------------------------------------------------------------
+# Emitted directly from the custom Python tasks the Airflow provider cannot
+# extract automatically. 1.52.0 is Airflow 3.3.1's constrained version and
+# satisfies the openlineage provider 2.21.0 floor (>=1.52.0).
+openlineage-python==1.52.0
+
+# --- API + webhook receiver ------------------------------------------------
+fastapi==0.136.3
+uvicorn[standard]==0.52.1
+
+# --- Postgres driver used by the platform's own code ----------------------
+psycopg[binary,pool]==3.3.4
+
+# --- SQLAlchemy / psycopg2, pinned to Airflow's constrained values --------
+# Without these two pins the standalone platform image resolves SQLAlchemy
+# 2.1.9 and psycopg2-binary 2.9.13 (nothing constrains it there), while the
+# Airflow image stays at 2.0.51 / 2.9.12. Great Expectations' SQL datasource
+# sits directly on SQLAlchemy, so the two images would be exercising
+# different database layers - and the tests would be proving the behaviour of
+# a stack the DAG never runs. Pinned so both images are identical.
+SQLAlchemy==2.0.51
+psycopg2-binary==2.9.12
+
+# --- Contracts are YAML ----------------------------------------------------
+PyYAML==6.0.3
+
+# --- Statistics for distribution drift (PSI, chi-square) ------------------
+scipy==1.18.0
+numpy==2.5.1
+pandas==3.0.5
+
+# --- Settings / retries ----------------------------------------------------
+pydantic==2.13.4
+tenacity==9.1.2

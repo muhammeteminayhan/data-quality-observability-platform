@@ -1,0 +1,183 @@
+# ===========================================================================
+# Contract: customer_activity (Parquet in MinIO)
+# ===========================================================================
+dataset: customer_activity
+version: "1.0.0"
+owner: analytics-platform
+criticality: medium
+layer: lake
+description: >
+  Per-customer engagement per day at
+  s3://<bucket>/customer_activity/dt=YYYY-MM-DD/. Only active customers
+  appear, so this dataset is legitimately smaller than raw.customers and its
+  row count moves with real behaviour - which is why its volume tolerance is
+  wider than the other two lake datasets.
+
+source:
+  type: parquet
+  location: customer_activity
+  event_timestamp_column: event_ts
+  ingestion_timestamp_column: ingested_at
+  partition_column: dt
+
+freshness:
+  enabled: true
+  warning_after_minutes: 1500
+  critical_after_minutes: 2880
+  on_missing_timestamp: ERROR
+
+volume:
+  enabled: true
+  min_rows: 50
+  max_rows: 2000000
+  severity: ERROR
+  baseline:
+    method: rolling_median_mad
+    window_days: 28
+    min_history_points: 5
+    warning_z: 4.0
+    critical_z: 7.0
+    same_day_type: true
+
+schema:
+  enforce: true
+  on_additive: INFO
+  on_type_change: CRITICAL
+  on_column_removal: CRITICAL
+  on_rename_candidate: ERROR
+  columns:
+    - name: activity_date
+      type: date
+      nullable: false
+    - name: customer_id
+      type: string
+      nullable: false
+    - name: segment
+      type: string
+      nullable: false
+    - name: state
+      type: string
+    - name: sessions
+      type: int64
+      nullable: false
+    - name: page_views
+      type: int64
+      nullable: false
+    - name: cart_additions
+      type: int64
+    - name: orders_placed
+      type: int64
+      nullable: false
+    - name: revenue
+      type: double
+    - name: conversion_rate
+      type: double
+    - name: event_ts
+      type: timestamptz
+      nullable: false
+    - name: ingested_at
+      type: timestamptz
+      nullable: false
+    - name: batch_id
+      type: string
+      nullable: false
+
+distribution:
+  enabled: true
+  min_sample_size: 500
+  severity: WARNING
+  numeric:
+    - column: page_views
+      method: psi
+      bins: 10
+      warning: 0.15
+      critical: 0.30
+    - column: conversion_rate
+      method: psi
+      bins: 8
+      warning: 0.15
+      critical: 0.30
+  categorical:
+    - column: segment
+      method: chi_square
+      alpha: 0.01
+      min_expected_frequency: 5
+
+quality_rules:
+  - name: customer_id_not_null
+    dimension: completeness
+    severity: CRITICAL
+    expectation: expect_column_values_to_not_be_null
+    column: customer_id
+
+  - name: sessions_not_null
+    dimension: completeness
+    severity: ERROR
+    expectation: expect_column_values_to_not_be_null
+    column: sessions
+
+  - name: customer_unique_per_day
+    dimension: uniqueness
+    severity: CRITICAL
+    expectation: expect_compound_columns_to_be_unique
+    kwargs:
+      column_list: [activity_date, customer_id]
+
+  - name: sessions_positive
+    dimension: validity
+    severity: ERROR
+    description: A row only exists because the customer was active.
+    expectation: expect_column_values_to_be_between
+    column: sessions
+    kwargs:
+      min_value: 1
+      max_value: 10000
+
+  - name: conversion_rate_is_a_rate
+    dimension: validity
+    severity: ERROR
+    expectation: expect_column_values_to_be_between
+    column: conversion_rate
+    kwargs:
+      min_value: 0.0
+      max_value: 1.0
+
+  - name: segment_in_accepted_set
+    dimension: validity
+    severity: ERROR
+    expectation: expect_column_values_to_be_in_set
+    column: segment
+    kwargs:
+      value_set: [consumer, small_business, enterprise]
+
+  - name: orders_never_exceed_sessions
+    dimension: consistency
+    severity: ERROR
+    description: >
+      An order requires a session, so orders_placed can never exceed sessions.
+      A `pandas_query` rule: matching rows are the violations.
+    expectation: pandas_query
+    kwargs:
+      query: "orders_placed > sessions"
+
+  - name: revenue_zero_when_no_orders
+    dimension: consistency
+    severity: WARNING
+    description: >
+      Revenue without an order means the two aggregations disagree. A warning
+      rather than an error, because a late-settling order can legitimately
+      attribute revenue to a day with no new order.
+    expectation: pandas_query
+    kwargs:
+      query: "orders_placed == 0 and revenue > 0"
+
+score:
+  weights:
+    completeness: 0.25
+    uniqueness: 0.20
+    validity: 0.20
+    consistency: 0.15
+    freshness: 0.10
+    volume: 0.10
+  healthy_at: 90.0
+  degraded_at: 70.0

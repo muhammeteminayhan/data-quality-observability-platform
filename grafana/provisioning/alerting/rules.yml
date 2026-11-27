@@ -1,0 +1,419 @@
+# ==========================================================================
+# Grafana alert rules
+# ==========================================================================
+# Six rules, each with a threshold the platform can actually justify:
+#   CRITICAL contract failure, score below the degraded threshold,
+#   critical staleness, a volume anomaly beyond the contract critical_z,
+#   open CRITICAL incidents, and the exporter being unable to read the
+#   database - because while it is blind, the silence of the other five
+#   rules means nothing.
+# ==========================================================================
+apiVersion: 1
+groups:
+- orgId: 1
+  name: data-quality
+  folder: Data Quality
+  interval: 1m
+  rules:
+  - uid: dq-critical-failure
+    title: Dataset has a CRITICAL data-quality failure
+    condition: C
+    for: 1m
+    annotations:
+      summary: CRITICAL finding on {{ $labels.dataset }}
+      description: A contract rule of CRITICAL severity failed, so the dataset is unhealthy regardless
+        of its score and the quality gate will block the pipeline.
+      severity: CRITICAL
+    labels:
+      severity: CRITICAL
+      platform: data-quality
+    noDataState: NoData
+    execErrState: Error
+    data:
+    - refId: A
+      relativeTimeRange:
+        from: 600
+        to: 0
+      datasourceUid: dq-prometheus
+      model:
+        refId: A
+        expr: max(dq_dataset_has_critical_failure) by (dataset)
+        instant: true
+        range: false
+        datasource:
+          type: prometheus
+          uid: dq-prometheus
+    - refId: B
+      relativeTimeRange:
+        from: 600
+        to: 0
+      datasourceUid: __expr__
+      model:
+        refId: B
+        type: reduce
+        reducer: last
+        expression: A
+        datasource:
+          type: __expr__
+          uid: __expr__
+    - refId: C
+      relativeTimeRange:
+        from: 600
+        to: 0
+      datasourceUid: __expr__
+      model:
+        refId: C
+        type: threshold
+        expression: B
+        conditions:
+        - evaluator:
+            type: gt
+            params:
+            - 0.5
+          operator:
+            type: and
+          query:
+            params:
+            - B
+          reducer:
+            type: last
+            params: []
+          type: query
+        datasource:
+          type: __expr__
+          uid: __expr__
+  - uid: dq-score-degraded
+    title: Quality score below the degraded threshold
+    condition: C
+    for: 10m
+    annotations:
+      summary: Quality score for {{ $labels.dataset }} is {{ $value }}
+      description: The weighted score fell below 70. The underlying detectors have their own alerts; this
+        one catches a slow decline that no single check trips.
+      severity: WARNING
+    labels:
+      severity: WARNING
+      platform: data-quality
+    noDataState: NoData
+    execErrState: Error
+    data:
+    - refId: A
+      relativeTimeRange:
+        from: 600
+        to: 0
+      datasourceUid: dq-prometheus
+      model:
+        refId: A
+        expr: min(dq_quality_score) by (dataset)
+        instant: true
+        range: false
+        datasource:
+          type: prometheus
+          uid: dq-prometheus
+    - refId: B
+      relativeTimeRange:
+        from: 600
+        to: 0
+      datasourceUid: __expr__
+      model:
+        refId: B
+        type: reduce
+        reducer: last
+        expression: A
+        datasource:
+          type: __expr__
+          uid: __expr__
+    - refId: C
+      relativeTimeRange:
+        from: 600
+        to: 0
+      datasourceUid: __expr__
+      model:
+        refId: C
+        type: threshold
+        expression: B
+        conditions:
+        - evaluator:
+            type: lt
+            params:
+            - 70.0
+          operator:
+            type: and
+          query:
+            params:
+            - B
+          reducer:
+            type: last
+            params: []
+          type: query
+        datasource:
+          type: __expr__
+          uid: __expr__
+  - uid: dq-freshness-critical
+    title: Data is critically stale
+    condition: C
+    for: 5m
+    annotations:
+      summary: '{{ $labels.dataset }} is {{ $value }}s old'
+      description: Measured from the clock named in timestamp_source. A missing series means the dataset
+        exposes no usable timestamp, which the platform reports as unknown rather than fresh.
+      severity: CRITICAL
+    labels:
+      severity: CRITICAL
+      platform: data-quality
+    noDataState: NoData
+    execErrState: Error
+    data:
+    - refId: A
+      relativeTimeRange:
+        from: 600
+        to: 0
+      datasourceUid: dq-prometheus
+      model:
+        refId: A
+        expr: max(dq_freshness_lag_seconds) by (dataset, timestamp_source)
+        instant: true
+        range: false
+        datasource:
+          type: prometheus
+          uid: dq-prometheus
+    - refId: B
+      relativeTimeRange:
+        from: 600
+        to: 0
+      datasourceUid: __expr__
+      model:
+        refId: B
+        type: reduce
+        reducer: last
+        expression: A
+        datasource:
+          type: __expr__
+          uid: __expr__
+    - refId: C
+      relativeTimeRange:
+        from: 600
+        to: 0
+      datasourceUid: __expr__
+      model:
+        refId: C
+        type: threshold
+        expression: B
+        conditions:
+        - evaluator:
+            type: gt
+            params:
+            - 43200.0
+          operator:
+            type: and
+          query:
+            params:
+            - B
+          reducer:
+            type: last
+            params: []
+          type: query
+        datasource:
+          type: __expr__
+          uid: __expr__
+  - uid: dq-volume-anomaly
+    title: Row count far from its baseline
+    condition: C
+    for: 5m
+    annotations:
+      summary: Volume for {{ $labels.dataset }} is {{ $value }} robust sigma from baseline
+      description: The baseline is a rolling median with a MAD spread over same-day-type history, so a
+        normal weekend dip does not reach this threshold.
+      severity: ERROR
+    labels:
+      severity: ERROR
+      platform: data-quality
+    noDataState: NoData
+    execErrState: Error
+    data:
+    - refId: A
+      relativeTimeRange:
+        from: 600
+        to: 0
+      datasourceUid: dq-prometheus
+      model:
+        refId: A
+        expr: max(abs(dq_volume_robust_z_score)) by (dataset)
+        instant: true
+        range: false
+        datasource:
+          type: prometheus
+          uid: dq-prometheus
+    - refId: B
+      relativeTimeRange:
+        from: 600
+        to: 0
+      datasourceUid: __expr__
+      model:
+        refId: B
+        type: reduce
+        reducer: last
+        expression: A
+        datasource:
+          type: __expr__
+          uid: __expr__
+    - refId: C
+      relativeTimeRange:
+        from: 600
+        to: 0
+      datasourceUid: __expr__
+      model:
+        refId: C
+        type: threshold
+        expression: B
+        conditions:
+        - evaluator:
+            type: gt
+            params:
+            - 6.0
+          operator:
+            type: and
+          query:
+            params:
+            - B
+          reducer:
+            type: last
+            params: []
+          type: query
+        datasource:
+          type: __expr__
+          uid: __expr__
+  - uid: dq-open-critical-incidents
+    title: Open CRITICAL incidents
+    condition: C
+    for: 5m
+    annotations:
+      summary: '{{ $value }} CRITICAL incident(s) open'
+      description: Incidents resolve only after consecutive verified healthy measurements, so this staying
+        high means the problem is still being observed.
+      severity: CRITICAL
+    labels:
+      severity: CRITICAL
+      platform: data-quality
+    noDataState: NoData
+    execErrState: Error
+    data:
+    - refId: A
+      relativeTimeRange:
+        from: 600
+        to: 0
+      datasourceUid: dq-prometheus
+      model:
+        refId: A
+        expr: sum(dq_incidents{severity="CRITICAL",status="OPEN"})
+        instant: true
+        range: false
+        datasource:
+          type: prometheus
+          uid: dq-prometheus
+    - refId: B
+      relativeTimeRange:
+        from: 600
+        to: 0
+      datasourceUid: __expr__
+      model:
+        refId: B
+        type: reduce
+        reducer: last
+        expression: A
+        datasource:
+          type: __expr__
+          uid: __expr__
+    - refId: C
+      relativeTimeRange:
+        from: 600
+        to: 0
+      datasourceUid: __expr__
+      model:
+        refId: C
+        type: threshold
+        expression: B
+        conditions:
+        - evaluator:
+            type: gt
+            params:
+            - 0.5
+          operator:
+            type: and
+          query:
+            params:
+            - B
+          reducer:
+            type: last
+            params: []
+          type: query
+        datasource:
+          type: __expr__
+          uid: __expr__
+  - uid: dq-exporter-blind
+    title: Exporter cannot read observability_db
+    condition: C
+    for: 2m
+    annotations:
+      summary: The metrics exporter cannot reach observability_db
+      description: Every other alert here depends on this exporter. While it is blind the dashboards are
+        stale and the absence of alerts means nothing.
+      severity: CRITICAL
+    labels:
+      severity: CRITICAL
+      platform: data-quality
+    noDataState: NoData
+    execErrState: Error
+    data:
+    - refId: A
+      relativeTimeRange:
+        from: 600
+        to: 0
+      datasourceUid: dq-prometheus
+      model:
+        refId: A
+        expr: max(dq_collection_failed)
+        instant: true
+        range: false
+        datasource:
+          type: prometheus
+          uid: dq-prometheus
+    - refId: B
+      relativeTimeRange:
+        from: 600
+        to: 0
+      datasourceUid: __expr__
+      model:
+        refId: B
+        type: reduce
+        reducer: last
+        expression: A
+        datasource:
+          type: __expr__
+          uid: __expr__
+    - refId: C
+      relativeTimeRange:
+        from: 600
+        to: 0
+      datasourceUid: __expr__
+      model:
+        refId: C
+        type: threshold
+        expression: B
+        conditions:
+        - evaluator:
+            type: gt
+            params:
+            - 0.5
+          operator:
+            type: and
+          query:
+            params:
+            - B
+          reducer:
+            type: last
+            params: []
+          type: query
+        datasource:
+          type: __expr__
+          uid: __expr__

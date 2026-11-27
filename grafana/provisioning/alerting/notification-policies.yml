@@ -1,0 +1,16 @@
+apiVersion: 1
+
+# A single route so every data-quality alert reaches the receiver. Grouping is
+# by dataset and severity rather than by rule, so one broken dataset produces
+# one notification rather than one per failing rule - the same reasoning as
+# the platform's own incident deduplication.
+policies:
+  - orgId: 1
+    receiver: dq-webhook
+    group_by: [grafana_folder, alertname, dataset, severity]
+    group_wait: 30s
+    group_interval: 2m
+    # Long on purpose. A data-quality problem does not get more urgent by
+    # being repeated every five minutes, and the platform's own cooldown
+    # already suppresses repeat alerts for one recurring fault.
+    repeat_interval: 4h

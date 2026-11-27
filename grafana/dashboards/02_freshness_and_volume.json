@@ -1,0 +1,299 @@
+{
+  "uid": "dq-freshness-volume",
+  "title": "2. Freshness & Volume",
+  "description": "Is the data arriving, and is there the right amount of it. Includes which clock each freshness number came from.",
+  "tags": [
+    "data-quality",
+    "freshness",
+    "volume"
+  ],
+  "timezone": "utc",
+  "editable": false,
+  "schemaVersion": 39,
+  "version": 1,
+  "refresh": "30s",
+  "time": {
+    "from": "now-24h",
+    "to": "now"
+  },
+  "timepicker": {
+    "refresh_intervals": [
+      "10s",
+      "30s",
+      "1m",
+      "5m",
+      "15m"
+    ]
+  },
+  "panels": [
+    {
+      "type": "timeseries",
+      "title": "Freshness lag per dataset",
+      "description": "Measured from the dataset's own clock. A dataset with no usable timestamp emits NO series rather than a zero - zero would read as perfectly fresh.",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "dq-prometheus"
+      },
+      "gridPos": {
+        "h": 9,
+        "w": 16,
+        "x": 0,
+        "y": 0
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "dq-prometheus"
+          },
+          "expr": "dq_freshness_lag_seconds",
+          "legendFormat": "{{dataset}} ({{timestamp_source}})",
+          "range": true,
+          "instant": false,
+          "editorMode": "code"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "custom": {},
+          "unit": "s"
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom",
+          "showLegend": true
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      }
+    },
+    {
+      "type": "table",
+      "title": "Which clock was used",
+      "description": "event_time is the strongest evidence; object_mtime only proves a file was written, not that its contents are recent; unavailable means the dataset could not be measured at all.",
+      "datasource": {
+        "type": "postgres",
+        "uid": "dq-observability"
+      },
+      "gridPos": {
+        "h": 9,
+        "w": 8,
+        "x": 16,
+        "y": 0
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "postgres",
+            "uid": "dq-observability"
+          },
+          "format": "table",
+          "rawQuery": true,
+          "rawSql": "SELECT d.dataset_name AS \"dataset\",\n                           f.timestamp_source AS \"clock\",\n                           COALESCE(f.timestamp_column, '-') AS \"column\",\n                           f.lag_seconds AS \"lag_s\",\n                           f.status AS \"status\", f.severity AS \"severity\"\n                    FROM (\n                      SELECT DISTINCT ON (dataset_id) *\n                      FROM freshness_checks ORDER BY dataset_id, checked_at DESC\n                    ) f JOIN datasets d USING (dataset_id)\n                    ORDER BY f.lag_seconds DESC NULLS FIRST",
+          "editorMode": "code"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "custom": {}
+        },
+        "overrides": []
+      },
+      "options": {
+        "showHeader": true,
+        "cellHeight": "sm",
+        "footer": {
+          "show": false
+        }
+      }
+    },
+    {
+      "type": "timeseries",
+      "title": "Row count per dataset",
+      "description": "",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "dq-prometheus"
+      },
+      "gridPos": {
+        "h": 9,
+        "w": 12,
+        "x": 0,
+        "y": 9
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "dq-prometheus"
+          },
+          "expr": "dq_row_count",
+          "legendFormat": "{{dataset}}",
+          "range": true,
+          "instant": false,
+          "editorMode": "code"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "custom": {},
+          "unit": "short"
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom",
+          "showLegend": true
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      }
+    },
+    {
+      "type": "timeseries",
+      "title": "Volume deviation from the rolling median",
+      "description": "Percent away from the median of comparable history. With same_day_type the baseline for a Saturday is built only from other weekend days, so a normal weekend dip sits near zero.",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "dq-prometheus"
+      },
+      "gridPos": {
+        "h": 9,
+        "w": 12,
+        "x": 12,
+        "y": 9
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "dq-prometheus"
+          },
+          "expr": "dq_volume_deviation_percent",
+          "legendFormat": "{{dataset}}",
+          "range": true,
+          "instant": false,
+          "editorMode": "code"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "custom": {},
+          "unit": "percent"
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom",
+          "showLegend": true
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      }
+    },
+    {
+      "type": "table",
+      "title": "Volume baseline detail",
+      "description": "`insufficient_history` means the baseline could not be computed from enough comparable points, so the check reports unknown and claims no threshold at all.",
+      "datasource": {
+        "type": "postgres",
+        "uid": "dq-observability"
+      },
+      "gridPos": {
+        "h": 9,
+        "w": 24,
+        "x": 0,
+        "y": 18
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "postgres",
+            "uid": "dq-observability"
+          },
+          "format": "table",
+          "rawQuery": true,
+          "rawSql": "SELECT d.dataset_name AS \"dataset\", v.row_count AS \"rows\",\n                           v.baseline_method AS \"method\",\n                           v.history_points || '/' || v.min_history_required AS \"history\",\n                           v.baseline_median AS \"median\", v.baseline_mad AS \"mad\",\n                           v.robust_z_score AS \"robust_z\",\n                           v.deviation_percent AS \"dev_pct\",\n                           CASE WHEN v.is_weekend THEN 'weekend' ELSE 'weekday' END AS \"day_type\",\n                           v.status AS \"status\"\n                    FROM (\n                      SELECT DISTINCT ON (dataset_id) *\n                      FROM volume_checks ORDER BY dataset_id, checked_at DESC\n                    ) v JOIN datasets d USING (dataset_id)\n                    ORDER BY abs(COALESCE(v.robust_z_score, 0)) DESC",
+          "editorMode": "code"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "custom": {}
+        },
+        "overrides": []
+      },
+      "options": {
+        "showHeader": true,
+        "cellHeight": "sm",
+        "footer": {
+          "show": false
+        }
+      }
+    },
+    {
+      "type": "timeseries",
+      "title": "Row count history with the expected band",
+      "description": "The band is median +/- critical_z * spread, as recorded by the check. Drawn from the stored values rather than recomputed, so the picture matches the decision that was actually made.",
+      "datasource": {
+        "type": "postgres",
+        "uid": "dq-observability"
+      },
+      "gridPos": {
+        "h": 9,
+        "w": 24,
+        "x": 0,
+        "y": 27
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "postgres",
+            "uid": "dq-observability"
+          },
+          "format": "time_series",
+          "rawQuery": true,
+          "rawSql": "SELECT v.checked_at AS time, d.dataset_name AS metric,\n                           v.row_count AS value\n                    FROM volume_checks v JOIN datasets d USING (dataset_id)\n                    WHERE $__timeFilter(v.checked_at)\n                    ORDER BY v.checked_at",
+          "editorMode": "code"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "custom": {},
+          "unit": "short"
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom",
+          "showLegend": true
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      }
+    }
+  ]
+}

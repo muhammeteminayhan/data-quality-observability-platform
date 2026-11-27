@@ -1,0 +1,28 @@
+# ---------------------------------------------------------------------------
+# dbt - installed into an ISOLATED virtualenv, never into Airflow's own
+# site-packages.
+#
+# Why isolated
+# ------------
+# dbt-core 1.12.7 and dbt-common 1.39.0 both require `pathspec<1.1,>=0.9`.
+# Airflow 3.3.1's constraint file pins `pathspec==1.1.1`, and Airflow uses
+# pathspec to evaluate `.airflowignore` patterns while parsing DAGs. Installing
+# dbt beside Airflow therefore downgrades a library Airflow itself depends on
+# (measured: pathspec 1.1.1 -> 1.0.4 and more-itertools 11.1.0 -> 10.8.0).
+#
+# pip reports no conflict for that downgrade, which is exactly why it is worth
+# avoiding deliberately rather than discovering later: the resolver is happy,
+# but Airflow would be running a version it was never tested against.
+#
+# So:
+#   * docker/airflow/Dockerfile installs this file into /opt/dbt-venv and the
+#     DAG invokes /opt/dbt-venv/bin/dbt. Airflow keeps every constrained pin.
+#   * docker/platform/Dockerfile installs it into the main environment, because
+#     that image contains no Airflow and so has nothing to conflict with.
+#
+# dbt-postgres uses decoupled adapter versioning: 1.11.0 is the current adapter
+# release and resolves against dbt-core 1.12.x without a conflict.
+# ---------------------------------------------------------------------------
+
+dbt-core==1.12.7
+dbt-postgres==1.11.0

@@ -1,0 +1,250 @@
+# ===========================================================================
+# Contract: raw.orders
+# ===========================================================================
+# The most heavily constrained dataset: it is the one the quality gate blocks
+# on, and it carries the financial consistency rules.
+# ===========================================================================
+dataset: raw.orders
+version: "1.0.0"
+owner: data-platform
+criticality: critical
+layer: raw
+description: >
+  Order headers. High volume, strongly seasonal by weekday, and the anchor for
+  referential integrity across order_items and payments.
+
+source:
+  type: postgres
+  location: raw.orders
+  # order_date is the business event time; _ingested_at is when the pipeline
+  # saw the row. Freshness prefers the event time, so an upstream that keeps
+  # delivering old orders is visible even while the loads keep running.
+  event_timestamp_column: order_date
+  ingestion_timestamp_column: _ingested_at
+
+freshness:
+  enabled: true
+  warning_after_minutes: 180
+  critical_after_minutes: 720
+  on_missing_timestamp: CRITICAL
+
+volume:
+  enabled: true
+  min_rows: 1000
+  max_rows: 2000000
+  severity: ERROR
+  baseline:
+    method: rolling_median_mad
+    window_days: 28
+    min_history_points: 5
+    warning_z: 3.5
+    critical_z: 6.0
+    # Orders are materially quieter at weekends, so the baseline compares a
+    # Saturday with other Saturdays. Without this the generator's own weekend
+    # curve would be reported as a 40 percent volume incident.
+    same_day_type: true
+
+schema:
+  enforce: true
+  on_additive: INFO
+  on_type_change: CRITICAL
+  on_column_removal: CRITICAL
+  on_rename_candidate: ERROR
+  columns:
+    - name: ingestion_id
+      type: bigint
+      nullable: false
+    - name: order_id
+      type: text
+      nullable: false
+    - name: customer_id
+      type: text
+      nullable: false
+    - name: order_status
+      type: text
+      nullable: false
+    - name: order_date
+      type: timestamp with time zone
+      nullable: false
+    - name: approved_at
+      type: timestamp with time zone
+    - name: delivered_at
+      type: timestamp with time zone
+    - name: shipping_city
+      type: text
+    - name: shipping_state
+      type: text
+    - name: total_amount
+      type: numeric
+      nullable: false
+    - name: freight_amount
+      type: numeric
+    - name: discount_amount
+      type: numeric
+    - name: _ingested_at
+      type: timestamp with time zone
+      nullable: false
+    - name: _batch_id
+      type: text
+      nullable: false
+    - name: _source
+      type: text
+      nullable: false
+
+distribution:
+  enabled: true
+  min_sample_size: 1000
+  severity: WARNING
+  numeric:
+    - column: total_amount
+      method: psi
+      bins: 10
+      warning: 0.10
+      critical: 0.25
+  categorical:
+    - column: order_status
+      method: chi_square
+      alpha: 0.01
+      min_expected_frequency: 5
+
+quality_rules:
+  - name: order_id_not_null
+    dimension: completeness
+    severity: CRITICAL
+    expectation: expect_column_values_to_not_be_null
+    column: order_id
+
+  - name: customer_id_not_null
+    dimension: completeness
+    severity: CRITICAL
+    expectation: expect_column_values_to_not_be_null
+    column: customer_id
+
+  - name: total_amount_not_null
+    dimension: completeness
+    severity: CRITICAL
+    expectation: expect_column_values_to_not_be_null
+    column: total_amount
+
+  - name: order_date_not_null
+    dimension: completeness
+    severity: CRITICAL
+    expectation: expect_column_values_to_not_be_null
+    column: order_date
+
+  - name: order_id_unique
+    dimension: uniqueness
+    severity: ERROR
+    expectation: expect_column_values_to_be_unique
+    column: order_id
+
+  - name: order_status_in_accepted_set
+    dimension: validity
+    severity: ERROR
+    expectation: expect_column_values_to_be_in_set
+    column: order_status
+    kwargs:
+      value_set:
+        [pending, approved, processing, shipped, delivered, cancelled, returned]
+
+  - name: total_amount_non_negative
+    dimension: validity
+    severity: ERROR
+    expectation: expect_column_values_to_be_between
+    column: total_amount
+    kwargs:
+      min_value: 0
+      max_value: 1000000
+
+  - name: shipping_state_is_two_letters
+    dimension: validity
+    severity: WARNING
+    expectation: expect_column_value_lengths_to_equal
+    column: shipping_state
+    kwargs:
+      value: 2
+
+  - name: order_date_not_in_future
+    dimension: validity
+    severity: ERROR
+    description: >
+      A clock skew of a few minutes is normal, so the rule allows one hour of
+      slack rather than comparing against the exact instant.
+    expectation: unexpected_rows
+    sql: |
+      SELECT order_id, order_date
+      FROM {batch}
+      WHERE order_date > now() + interval '1 hour'
+
+  - name: every_order_has_a_known_customer
+    dimension: consistency
+    severity: CRITICAL
+    description: Referential integrity against raw.customers.
+    expectation: unexpected_rows
+    sql: |
+      SELECT o.order_id, o.customer_id
+      FROM {batch} o
+      LEFT JOIN raw.customers c ON c.customer_id = o.customer_id
+      WHERE o.customer_id IS NOT NULL AND c.customer_id IS NULL
+
+  - name: order_total_matches_line_items
+    dimension: consistency
+    severity: ERROR
+    description: >
+      total_amount must equal the sum of its line items plus freight, within a
+      two-cent rounding tolerance. Items are rounded individually, so an exact
+      equality test would fail on perfectly good data.
+    expectation: unexpected_rows
+    sql: |
+      SELECT o.order_id, o.total_amount, t.items_total, o.freight_amount
+      FROM {batch} o
+      JOIN (
+          SELECT order_id, SUM(line_total) AS items_total
+          FROM raw.order_items
+          GROUP BY order_id
+      ) t ON t.order_id = o.order_id
+      WHERE o.total_amount IS NOT NULL
+        AND abs(o.total_amount - (t.items_total + COALESCE(o.freight_amount, 0))) > 0.02
+
+  - name: settled_payments_match_order_total
+    dimension: consistency
+    severity: CRITICAL
+    description: >
+      The sum of SETTLING payments must equal the order total. Refunds are
+      excluded because a refund is a legitimate negative payment: on this
+      platform own clean data, summing all payment rows instead raises 3,265
+      false positives out of 50,000 orders. Cancelled orders are excluded
+      because they are genuinely never paid.
+    expectation: unexpected_rows
+    sql: |
+      SELECT o.order_id, o.total_amount, p.settled
+      FROM {batch} o
+      JOIN (
+          SELECT order_id, SUM(payment_value) AS settled
+          FROM raw.payments
+          WHERE payment_type <> 'refund'
+          GROUP BY order_id
+      ) p ON p.order_id = o.order_id
+      WHERE o.order_status <> 'cancelled'
+        AND o.total_amount IS NOT NULL
+        AND abs(o.total_amount - p.settled) > 0.02
+
+  - name: delivered_orders_have_a_delivery_date
+    dimension: consistency
+    severity: WARNING
+    expectation: unexpected_rows
+    sql: |
+      SELECT order_id, order_status
+      FROM {batch}
+      WHERE order_status IN ('shipped', 'delivered') AND delivered_at IS NULL
+
+score:
+  weights:
+    completeness: 0.25
+    uniqueness: 0.15
+    validity: 0.15
+    consistency: 0.25
+    freshness: 0.10
+    volume: 0.10
+  healthy_at: 95.0
+  degraded_at: 75.0
